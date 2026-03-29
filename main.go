@@ -84,6 +84,7 @@ func main() {
 	authMiddleware := middleware.NewAuthMiddleware(config.Cfg.Auth.Secret)
 	authHandler := handlers.NewAuthHandler(authMiddleware)
 	diaryHandler := handlers.NewDiaryHandler()
+	goalHandler := handlers.NewGoalHandler()
 	commonHandler := handlers.NewCommonHandler()
 
 	// Static files - use embedded filesystem (no auth required)
@@ -120,6 +121,13 @@ func main() {
 		protected.GET("/diary/:id", diaryHandler.Get)
 		protected.PUT("/diary/:id", diaryHandler.Update)
 		protected.DELETE("/diary/:id", diaryHandler.Delete)
+		protected.GET("/goals", goalHandler.List)
+		protected.POST("/goals", goalHandler.Create)
+		protected.GET("/goals/dashboard", goalHandler.Dashboard)
+		protected.PUT("/goals/:id", goalHandler.Update)
+		protected.DELETE("/goals/:id", goalHandler.Delete)
+		protected.PUT("/goals/:id/records/:date", goalHandler.UpsertRecord)
+		protected.DELETE("/goals/:id/records/:date", goalHandler.DeleteRecord)
 		protected.GET("/ip", commonHandler.GetIP)
 	}
 

@@ -20,6 +20,17 @@ export function getTodayDateString(): string {
 	return `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`;
 }
 
+export function getCurrentMonthString(): string {
+	const now = new Date();
+	return `${now.getFullYear()}-${pad2(now.getMonth() + 1)}`;
+}
+
+export function getYesterdayDateString(): string {
+	const now = new Date();
+	now.setDate(now.getDate() - 1);
+	return `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`;
+}
+
 export function getMonthRange(monthStr: string): { startDate: string; endDate: string } {
 	const [year, month] = monthStr.split('-').map(Number);
 	const lastDay = new Date(year, month, 0).getDate();
@@ -43,4 +54,32 @@ export function formatWeekday(dateStr: string): string {
 export function formatLongDate(dateStr: string): string {
 	const [year, month, day] = parseDateParts(dateStr);
 	return `${year}年${month}月${day}日 ${formatWeekday(dateStr)}`;
+}
+
+export function shiftMonth(monthStr: string, delta: number): string {
+	const [year, month] = monthStr.split('-').map(Number);
+	const next = new Date(year, month - 1 + delta, 1);
+	return `${next.getFullYear()}-${pad2(next.getMonth() + 1)}`;
+}
+
+export function getMonthCalendarDays(monthStr: string): Array<{ date: string; day: number; inMonth: boolean }> {
+	if (!monthStr) return [];
+
+	const [year, month] = monthStr.split('-').map(Number);
+	const first = new Date(year, month - 1, 1);
+	const startWeekday = (first.getDay() + 6) % 7;
+	const start = new Date(year, month - 1, 1 - startWeekday);
+	const cells: Array<{ date: string; day: number; inMonth: boolean }> = [];
+
+	for (let index = 0; index < 42; index += 1) {
+		const current = new Date(start);
+		current.setDate(start.getDate() + index);
+		cells.push({
+			date: `${current.getFullYear()}-${pad2(current.getMonth() + 1)}-${pad2(current.getDate())}`,
+			day: current.getDate(),
+			inMonth: current.getMonth() === month - 1
+		});
+	}
+
+	return cells;
 }

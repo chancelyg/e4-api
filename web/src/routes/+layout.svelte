@@ -1,5 +1,6 @@
 <script lang="ts">
 	import '../app.css';
+	import { page } from '$app/state';
 	import { auth } from '$lib/stores.svelte';
 	import { onMount } from 'svelte';
 
@@ -13,6 +14,9 @@
 		await auth.logout();
 		window.location.href = '/';
 	}
+
+	const isDiarySection = $derived(page.url.pathname.startsWith('/diary'));
+	const isGoalsSection = $derived(page.url.pathname.startsWith('/goals'));
 </script>
 
 <div class="app-shell">
@@ -25,8 +29,8 @@
 			</a>
 
 			<nav class="sidebar-nav">
-				<a href="/diary" class="sidebar-link">日记列表</a>
-				<a href="/diary/new" class="sidebar-link sidebar-link-secondary">写新日记</a>
+				<a href="/diary" class:sidebar-link-active={isDiarySection} class="sidebar-link">日记</a>
+				<a href="/goals" class:sidebar-link-active={isGoalsSection} class="sidebar-link sidebar-link-secondary">目标打卡</a>
 			</nav>
 
 			<div class="sidebar-footer">
@@ -134,8 +138,22 @@
 		background: #f4f0e9;
 	}
 
+	.sidebar-link-active {
+		border-color: rgba(140, 90, 60, 0.3);
+		background: linear-gradient(180deg, rgba(240, 224, 206, 0.96) 0%, rgba(233, 217, 199, 0.92) 100%);
+		box-shadow: inset 0 0 0 1px rgba(140, 90, 60, 0.14);
+	}
+
+	.sidebar-link-active::after {
+		color: var(--color-ink);
+	}
+
 	.sidebar-link-secondary {
 		background: #fcfaf6;
+	}
+
+	.sidebar-link-active.sidebar-link-secondary {
+		background: linear-gradient(180deg, rgba(240, 224, 206, 0.96) 0%, rgba(233, 217, 199, 0.92) 100%);
 	}
 
 	.sidebar-footer {

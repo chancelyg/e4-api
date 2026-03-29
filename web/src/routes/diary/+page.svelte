@@ -3,7 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { diaryAPI, type Diary, type DiaryStats } from '$lib/api';
 	import { auth } from '$lib/stores.svelte';
-	import { formatMonthLabel, formatWeekday, getMonthRange } from '$lib/date';
+	import { formatMonthLabel, formatWeekday, getCurrentMonthString, getMonthRange } from '$lib/date';
 
 	let diaries = $state<Diary[]>([]);
 	let stats = $state<DiaryStats | null>(null);
@@ -13,6 +13,7 @@
 	let search = $state('');
 	let month = $state('');
 	let isLoading = $state(true);
+	let monthPicker = $state(getCurrentMonthString());
 
 	onMount(() => {
 		void initPage();
@@ -71,6 +72,21 @@
 	function clearFilters() {
 		search = '';
 		month = '';
+		monthPicker = getCurrentMonthString();
+		page = 1;
+		loadData();
+	}
+
+	function applyMonthSelection(nextMonth: string) {
+		month = nextMonth;
+		monthPicker = nextMonth;
+		page = 1;
+		loadData();
+	}
+
+	function clearMonthSelection() {
+		month = '';
+		monthPicker = getCurrentMonthString();
 		page = 1;
 		loadData();
 	}
@@ -83,6 +99,8 @@
 	function getPageCount() {
 		return Math.max(1, Math.ceil(total / perPage));
 	}
+
+	const pickerMonthLabel = $derived(formatMonthLabel(monthPicker));
 </script>
 
 <div class="diary-page">
@@ -140,14 +158,36 @@
 					/>
 				</label>
 				<label class="filter-field filter-month">
-					<span>月份</span>
-					<input type="month" bind:value={month} />
+					<span>月份回看</span>
+					<div class="month-filter-shell">
+						<div class="month-filter-head month-filter-head-compact">
+							<div>
+								<strong>{pickerMonthLabel}</strong>
+								<small>{month ? `当前筛选：${formatMonthLabel(month)}` : '选择年份和月份后点击检索'}</small>
+							</div>
+						</div>
+
+						<div class="month-picker-row">
+							<input
+								class="month-input"
+								type="month"
+								bind:value={monthPicker}
+								max={getCurrentMonthString()}
+							/>
+							<button type="button" class="btn variant-soft-surface" onclick={() => applyMonthSelection(monthPicker)}>
+								按月份查询
+							</button>
+						</div>
+					</div>
 				</label>
 			</div>
 			<div class="filter-actions">
-				<button onclick={handleSearch} class="btn variant-filled-primary">检索</button>
+				<button type="button" onclick={handleSearch} class="btn variant-filled-primary">检索</button>
 				{#if search || month}
-					<button onclick={clearFilters} class="btn variant-soft-surface">清除</button>
+					<button type="button" onclick={clearFilters} class="btn variant-soft-surface">清除全部</button>
+				{/if}
+				{#if month}
+					<button type="button" onclick={clearMonthSelection} class="btn variant-soft-surface">仅清除月份</button>
 				{/if}
 				<a href="/diary/new" class="btn btn-compose">写新日记</a>
 			</div>
@@ -184,7 +224,7 @@
 							</div>
 							<div class="diary-row-body">
 								<p class="diary-content">{diary.content}</p>
-								<a class="diary-link" href={`/diary/${diary.id}`}>查看详情</a>
+								<a class="diary-edit-link" href={`/diary/${diary.id}`}>编辑</a>
 							</div>
 						</article>
 					{/each}
@@ -312,7 +352,7 @@
 
 	.filter-fields {
 		display: grid;
-		grid-template-columns: minmax(0, 1.4fr) minmax(180px, 220px);
+		grid-template-columns: minmax(0, 1fr) minmax(340px, 420px);
 		gap: 14px;
 		flex: 1;
 	}
@@ -325,6 +365,55 @@
 	.filter-field span {
 		font-size: 13px;
 		color: var(--color-muted);
+	}
+
+	.month-filter-shell {
+		display: grid;
+		gap: 14px;
+		padding: 14px;
+		border: 1px solid var(--color-border);
+		border-radius: 18px;
+		background: linear-gradient(180deg, rgba(255, 252, 247, 0.96) 0%, rgba(248, 241, 232, 0.92) 100%);
+	}
+
+	.month-filter-head {
+		display: flex;
+		justify-content: space-between;
+		gap: 12px;
+		align-items: flex-start;
+	}
+
+	.month-filter-head strong {
+		display: block;
+		font-size: 1rem;
+		font-weight: 700;
+	}
+
+	.month-filter-head-compact {
+		align-items: center;
+	}
+
+	.month-filter-head small {
+		display: block;
+		margin-top: 4px;
+		color: var(--color-muted);
+	}
+
+	.month-picker-row {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		flex-wrap: wrap;
+	}
+
+	.month-input {
+		min-height: 46px;
+		padding: 0 14px;
+		border: 1px solid var(--color-border);
+		border-radius: 14px;
+		background: rgba(255, 255, 255, 0.82);
+		font: inherit;
+		color: var(--color-ink);
 	}
 
 	.filter-field input {
@@ -418,14 +507,9 @@
 		line-height: 1.9;
 		white-space: pre-wrap;
 		word-break: break-word;
-		display: -webkit-box;
-		-webkit-line-clamp: 4;
-		line-clamp: 4;
-		-webkit-box-orient: vertical;
-		overflow: hidden;
 	}
 
-	.diary-link {
+	.diary-edit-link {
 		width: fit-content;
 		padding-bottom: 2px;
 		border-bottom: 1px solid var(--color-ink-soft);

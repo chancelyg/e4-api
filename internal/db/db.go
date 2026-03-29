@@ -22,5 +22,5 @@ func Init() error {
 	}
 
 	// Auto migrate
-	return DB.AutoMigrate(&models.Diary{}, &models.SessionRevocation{})
+	return DB.AutoMigrate(&models.Diary{}, &models.Goal{}, &models.GoalRecord{}, &models.SessionRevocation{})
 }

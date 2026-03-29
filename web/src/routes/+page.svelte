@@ -74,7 +74,7 @@
 		</p>
 		<div class="login-note">
 			<p>适合单机部署的个人日记服务。</p>
-			<p>默认账号：`admin / admin`</p>
+			<p>首次部署后请立即设置独立账号、强密码哈希和会话密钥。</p>
 		</div>
 	</section>
 

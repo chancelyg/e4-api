@@ -36,11 +36,13 @@ func main() {
 		fmt.Fprintf(flag.CommandLine.Output(), "\n版本信息:\n  version: %s\n  commit: %s\n  built: %s\n", version, commit, buildDate)
 		fmt.Fprintf(flag.CommandLine.Output(), "\n常用环境变量:\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  E4_SERVER_PORT            监听端口\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "  E4_SERVER_HOST            监听地址（默认 127.0.0.1）\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  E4_SERVER_MODE            运行模式（development/release）\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  E4_DATABASE_DSN           SQLite 数据库路径\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  E4_AUTH_USERNAME          登录用户名\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  E4_AUTH_PASSWORD          bcrypt 密码哈希\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  E4_AUTH_SECRET            会话签名密钥\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "\n配置优先级:\n  显式环境变量 > .env > config.yaml > 内置默认值\n")
 	}
 
 	flag.Bool("version", false, "显示版本信息")
@@ -73,12 +75,15 @@ func main() {
 	// Middleware
 	e.Use(echoMiddleware.Logger())
 	e.Use(echoMiddleware.Recover())
-	e.Use(echoMiddleware.CORSWithConfig(echoMiddleware.CORSConfig{
-		AllowOrigins:     []string{"http://localhost:5173"},
-		AllowMethods:     []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodOptions},
-		AllowHeaders:     []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept},
-		AllowCredentials: true,
-	}))
+	e.Use(echoMiddleware.Secure())
+	if config.Cfg.Server.Mode != "release" {
+		e.Use(echoMiddleware.CORSWithConfig(echoMiddleware.CORSConfig{
+			AllowOrigins:     []string{"http://localhost:5173"},
+			AllowMethods:     []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodOptions},
+			AllowHeaders:     []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept},
+			AllowCredentials: true,
+		}))
+	}
 
 	// Initialize auth middleware and handlers
 	authMiddleware := middleware.NewAuthMiddleware(config.Cfg.Auth.Secret)
@@ -147,6 +152,12 @@ func main() {
 		port = 8080
 	}
 
-	log.Printf("Server starting on port %d", port)
-	log.Fatal(e.Start(":" + strconv.Itoa(port)))
+	host := config.Cfg.Server.Host
+	if host == "" {
+		host = "127.0.0.1"
+	}
+
+	address := host + ":" + strconv.Itoa(port)
+	log.Printf("Server starting on %s", address)
+	log.Fatal(e.Start(address))
 }

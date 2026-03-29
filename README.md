@@ -58,6 +58,7 @@
 │   ├── dist/                  # 前端构建结果（生成文件）
 │   └── .svelte-kit/           # SvelteKit 生成文件
 ├── data/                      # 运行期 SQLite 数据
+├── deploy/                    # systemd / Nginx / 部署参考
 ├── build.sh                   # 生产构建脚本
 ├── dev.sh                     # 本地开发脚本
 ├── config.yaml                # 本地开发配置
@@ -152,17 +153,26 @@ goreleaser release --snapshot --clean
 
 ## 配置说明
 
-项目支持通过 `config.yaml` 和环境变量配置，环境变量优先级更高。
+项目支持通过 `config.yaml`、`.env` 和环境变量配置。
+
+优先级如下：
+
+1. 显式环境变量
+2. `.env`
+3. `config.yaml`
+4. 内置默认值
 
 ### 推荐做法
 
-- 本地开发：使用 `config.yaml`
-- 部署环境：使用环境变量覆盖敏感配置
+- 本地开发：优先使用 `config.yaml` 保存非敏感默认项
+- 部署环境：把敏感项放进 `.env` 或外部环境变量
+- 不要把生产账号、密码哈希、secret 写进仓库内的 `config.yaml`
 
 ### 关键配置项
 
 ```yaml
 server:
+  host: 127.0.0.1
   port: 8080
   mode: development
 
@@ -170,9 +180,6 @@ database:
   dsn: ./data/app.db
 
 auth:
-  username: admin
-  password: <bcrypt-hash>
-  secret: change-me
   totp_secret: ""
   rate_limit: 5
   lockout_minutes: 15
@@ -185,6 +192,7 @@ site:
 
 参考 `.env.example`：
 
+- `E4_SERVER_HOST`
 - `E4_SERVER_PORT`
 - `E4_SERVER_MODE`
 - `E4_DATABASE_DSN`
@@ -198,13 +206,21 @@ site:
 
 ## 安全说明
 
-当前仓库保留了开发默认配置，便于本地快速启动，但生产环境必须覆盖：
+当前仓库保留了开发默认配置，便于本地快速启动，但生产环境必须通过 `.env` 或外部环境变量覆盖：
 
 - `auth.username`
 - `auth.password`
 - `auth.secret`
 
+同时建议部署时保持：
+
+- `server.host=127.0.0.1`，仅让 Nginx/Caddy 在本机反代
+- `server.mode=release`
+- HTTPS 终止在反向代理层
+
 项目现在会在 `release` 模式下拒绝使用默认管理员凭据和默认 secret。
+
+详细部署参考见 `deploy/README.md`。
 
 ## 会话持久化说明
 

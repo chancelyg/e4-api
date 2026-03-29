@@ -1,0 +1,23 @@
+[Unit]
+Description=E4 Diary API service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=e4
+Group=e4
+WorkingDirectory=/opt/e4-api
+EnvironmentFile=/opt/e4-api/.env
+ExecStart=/opt/e4-api/e4-api
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/e4-api/data
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

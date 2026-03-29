@@ -3,20 +3,36 @@ version: 2
 before:
   hooks:
     - ./scripts/prepare-dist.sh
+    - go mod tidy
 
 builds:
   - id: e4-api
     main: ./main.go
     binary: e4-api
     env:
-      - CGO_ENABLED=1
+      - CGO_ENABLED=0
     goos:
       - linux
       - darwin
       - windows
+      - freebsd
     goarch:
       - amd64
       - arm64
+      - 386
+      - arm
+    goarm:
+      - 6
+      - 7
+    ignore:
+      - goos: darwin
+        goarch: 386
+      - goos: darwin
+        goarch: arm
+      - goos: windows
+        goarch: arm
+      - goos: freebsd
+        goarch: arm
     flags:
       - -trimpath
     ldflags:
@@ -39,6 +55,21 @@ archives:
     files:
       - README.md
       - config.yaml
+      - .env.example
+      - deploy/*
+
+release:
+  github:
+    owner: chancelyg
+    name: e4-api
+  draft: false
+  prerelease: auto
+
+source:
+  enabled: true
+
+sboms:
+  - artifacts: archive
 
 checksum:
   name_template: checksums.txt

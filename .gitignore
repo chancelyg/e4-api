@@ -1,0 +1,33 @@
+# Binaries
+/e4-api
+/*.exe
+/*.out
+
+# Go coverage and cache
+*.test
+*.prof
+coverage.out
+
+# Runtime data
+/data/*.db
+/data/*.db-*
+/data/*.sqlite
+/data/*.sqlite3
+
+# Local environment
+.env
+.env.*
+!.env.example
+
+# Generated frontend artifacts
+web/dist/
+web/.svelte-kit/
+pkg/dist/
+web/node_modules/
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db

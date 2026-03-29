@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="E4 Diary">
+  <rect width="64" height="64" rx="16" fill="#f4ede3" />
+  <path d="M18 14h20c5.523 0 10 4.477 10 10v26H26c-4.418 0-8-3.582-8-8V14z" fill="#8c5a3c" />
+  <path d="M26 18h20v28H28c-1.105 0-2-.895-2-2V18z" fill="#fffaf4" />
+  <path d="M31 25h10M31 31h10M31 37h7" stroke="#8c5a3c" stroke-width="2.5" stroke-linecap="round" />
+  <path d="M18 14v28c0 4.418 3.582 8 8 8" fill="none" stroke="#5c3d2a" stroke-width="2.5" stroke-linecap="round" />
+</svg>

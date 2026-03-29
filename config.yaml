@@ -1,0 +1,17 @@
+server:
+  port: 8080
+  mode: development
+
+database:
+  dsn: ./data/app.db
+
+auth:
+  username: admin
+  password: $2a$10$4ZPgUj01QYUd/4feVvRWKebBpHeWiHJQyJABYlTcycO6LiguI.Du2
+  secret: your-secret-key-change-in-production
+  totp_secret: ""
+  rate_limit: 5
+  lockout_minutes: 15
+
+site:
+  title: e4-api

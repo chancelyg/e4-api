@@ -4,7 +4,7 @@ import (
 	"e4-api/internal/config"
 	"e4-api/internal/models"
 
-	"gorm.io/driver/sqlite"
+	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )

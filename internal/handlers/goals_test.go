@@ -12,10 +12,10 @@ import (
 	"e4-api/internal/db"
 	"e4-api/internal/models"
 
+	"github.com/glebarez/sqlite"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )

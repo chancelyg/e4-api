@@ -146,10 +146,30 @@ goreleaser release --snapshot --clean
 默认行为：
 
 - 先执行 `scripts/prepare-dist.sh` 构建前端并刷新 `pkg/dist`
-- 再编译 `linux` / `darwin` / `windows` 的 `amd64` 与 `arm64` 二进制
+- 再编译 `linux` / `darwin` / `windows` / `freebsd` 的常见架构二进制
 - 输出校验文件 `checksums.txt`
+- 自动创建 GitHub Release 并上传构建产物
+
+常见发布平台包括：
+
+- Linux: `amd64`, `arm64`, `386`, `armv6`, `armv7`
+- macOS: `amd64`, `arm64`
+- Windows: `amd64`, `arm64`, `386`
+- FreeBSD: `amd64`, `arm64`, `386`
 
 如果只想本地验证配置，可以继续使用 snapshot 模式；正式发版时再基于 git tag 执行 `goreleaser release`。
+
+正式发布流程：
+
+1. 创建并推送版本 tag，例如 `v0.1.1`
+2. GitHub Actions 自动触发 GoReleaser
+3. 产物上传到对应 GitHub Release 页面
+
+如果你在本机手动发布：
+
+```bash
+goreleaser release --clean
+```
 
 ## 配置说明
 
@@ -221,6 +241,29 @@ site:
 项目现在会在 `release` 模式下拒绝使用默认管理员凭据和默认 secret。
 
 详细部署参考见 `deploy/README.md`。
+
+## TOTP 工具
+
+仓库提供了 `scripts/generate-totp.sh`，用于生成：
+
+- Base32 TOTP 密钥
+- `otpauth://` URI 字符串
+- 文本二维码
+- SVG 二维码
+
+示例：
+
+```bash
+E4_TOTP_ISSUER="E4 Diary" E4_TOTP_ACCOUNT="admin" ./scripts/generate-totp.sh
+```
+
+可选输出目录参数：
+
+```bash
+./scripts/generate-totp.sh ./out/my-totp
+```
+
+脚本优先使用 `qrencode`，如果系统未安装，则回退到 `npx qrcode`。
 
 ## 会话持久化说明
 

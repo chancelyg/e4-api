@@ -28,6 +28,9 @@ web/node_modules/
 # Logs
 *.log
 
+# Local generated artifacts
+/out/
+
 # OS files
 .DS_Store
 Thumbs.db

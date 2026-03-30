@@ -54,9 +54,9 @@ func seedInactiveGoal(t *testing.T, goal models.Goal) {
 	require.NoError(t, db.DB.Model(&models.Goal{}).Where("id = ?", goal.ID).Update("is_active", false).Error)
 }
 
-func TestGoalCreateRejectsInvalidQuantityGoal(t *testing.T) {
+func TestGoalCreateWithOptionalFields(t *testing.T) {
 	handler, e := setupTestGoalHandler(t)
-	body := bytes.NewBufferString(`{"name":"跑步","goal_type":"quantity"}`)
+	body := bytes.NewBufferString(`{"name":"跑步","description":"晨跑累计","unit":"km","annual_target":500}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/goals", body)
 	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	rec := httptest.NewRecorder()
@@ -64,15 +64,22 @@ func TestGoalCreateRejectsInvalidQuantityGoal(t *testing.T) {
 
 	err := handler.Create(c)
 	require.NoError(t, err)
-	require.Equal(t, http.StatusBadRequest, rec.Code)
-	assert.JSONEq(t, `{"error":"数值累计型目标需要填写单位"}`, rec.Body.String())
+	require.Equal(t, http.StatusCreated, rec.Code)
+
+	var goal models.Goal
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &goal))
+	assert.Equal(t, "跑步", goal.Name)
+	assert.Equal(t, "晨跑累计", goal.Description)
+	assert.Equal(t, "km", goal.Unit)
+	require.NotNil(t, goal.AnnualTarget)
+	assert.Equal(t, 500.0, *goal.AnnualTarget)
 }
 
-func TestGoalUpsertRecordRejectsOlderDate(t *testing.T) {
+func TestGoalUpsertRecordRejectsPreviousYearDate(t *testing.T) {
 	handler, e := setupTestGoalHandler(t)
-	seedGoals(t, []models.Goal{{Name: "冥想", GoalType: models.GoalTypeCheckbox, IsActive: true, SortOrder: 1}})
+	seedGoals(t, []models.Goal{{Name: "冥想", IsActive: true, SortOrder: 1}})
 
-	olderDate := time.Now().AddDate(0, 0, -2).Format(goalDateLayout)
+	olderDate := time.Date(today().Year()-1, 12, 31, 0, 0, 0, 0, today().Location()).Format(goalDateLayout)
 	req := httptest.NewRequest(http.MethodPut, "/api/goals/1/records/"+olderDate, bytes.NewBufferString(`{}`))
 	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	rec := httptest.NewRecorder()
@@ -83,13 +90,30 @@ func TestGoalUpsertRecordRejectsOlderDate(t *testing.T) {
 	err := handler.UpsertRecord(c)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusBadRequest, rec.Code)
-	assert.JSONEq(t, `{"error":"只能填写今天或昨天的打卡记录"}`, rec.Body.String())
+	assert.JSONEq(t, `{"error":"只能填写今年且不晚于今天的打卡记录"}`, rec.Body.String())
+}
+
+func TestGoalUpsertRecordAllowsEarlierDateInSameYear(t *testing.T) {
+	handler, e := setupTestGoalHandler(t)
+	seedGoals(t, []models.Goal{{Name: "冥想", IsActive: true, SortOrder: 1}})
+
+	recordDate := time.Date(today().Year(), 1, 2, 0, 0, 0, 0, today().Location()).Format(goalDateLayout)
+	req := httptest.NewRequest(http.MethodPut, "/api/goals/1/records/"+recordDate, bytes.NewBufferString(`{}`))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("id", "date")
+	c.SetParamValues("1", recordDate)
+
+	err := handler.UpsertRecord(c)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, rec.Code)
 }
 
 func TestGoalUpsertRecordStoresQuantity(t *testing.T) {
 	handler, e := setupTestGoalHandler(t)
 	annualTarget := 500.0
-	seedGoals(t, []models.Goal{{Name: "跑步", GoalType: models.GoalTypeQuantity, Unit: "km", AnnualTarget: &annualTarget, IsActive: true, SortOrder: 1}})
+	seedGoals(t, []models.Goal{{Name: "跑步", Unit: "km", AnnualTarget: &annualTarget, IsActive: true, SortOrder: 1}})
 
 	date := time.Now().AddDate(0, 0, -1).Format(goalDateLayout)
 	req := httptest.NewRequest(http.MethodPut, "/api/goals/1/records/"+date, bytes.NewBufferString(`{"quantity":5.2}`))
@@ -115,16 +139,21 @@ func TestGoalDashboardBuildsAggregates(t *testing.T) {
 	annualRun := 500.0
 	weeklyRun := 3
 	seedGoals(t, []models.Goal{
-		{Name: "冥想", GoalType: models.GoalTypeCheckbox, IsActive: true, SortOrder: 1},
-		{Name: "跑步", GoalType: models.GoalTypeQuantity, Unit: "km", AnnualTarget: &annualRun, IsActive: true, SortOrder: 2},
-		{Name: "打球", GoalType: models.GoalTypeFrequency, WeeklyTarget: &weeklyRun, IsActive: true, SortOrder: 3},
+		{Name: "冥想", IsActive: true, SortOrder: 1},
+		{Name: "跑步", Unit: "km", AnnualTarget: &annualRun, IsActive: true, SortOrder: 2},
+		{Name: "打球", WeeklyTarget: &weeklyRun, IsActive: true, SortOrder: 3},
 	})
 
 	anchor := today()
 	yesterday := anchor.AddDate(0, 0, -1)
 	monthStart := time.Date(anchor.Year(), anchor.Month(), 1, 0, 0, 0, 0, anchor.Location())
+	thisWeekDate := anchor.AddDate(0, 0, -2)
+	if thisWeekDate.Before(monthStart) {
+		thisWeekDate = anchor
+	}
 	seedGoalRecords(t, []models.GoalRecord{
 		{GoalID: 1, RecordDate: yesterday.Format(goalDateLayout), IsCompleted: true},
+		{GoalID: 1, RecordDate: thisWeekDate.Format(goalDateLayout), IsCompleted: true},
 		{GoalID: 1, RecordDate: monthStart.Format(goalDateLayout), IsCompleted: true},
 		{GoalID: 2, RecordDate: yesterday.Format(goalDateLayout), IsCompleted: true, Quantity: floatPtr(5)},
 		{GoalID: 2, RecordDate: monthStart.Format(goalDateLayout), IsCompleted: true, Quantity: floatPtr(3)},
@@ -145,6 +174,10 @@ func TestGoalDashboardBuildsAggregates(t *testing.T) {
 	require.Len(t, response.Goals, 3)
 	assert.Equal(t, yesterday.Format(goalDateLayout), response.CheckinDate)
 	assert.NotEmpty(t, response.CalendarDays)
+	assert.GreaterOrEqual(t, response.TodayCompletedCount, 0)
+	assert.Equal(t, 6, response.AnnualCheckinTotal)
+	assert.NotNil(t, response.WeekDetails)
+	assert.NotEmpty(t, response.MonthDetails)
 
 	runGoal := response.Goals[1]
 	assert.Equal(t, "跑步", runGoal.Name)
@@ -163,7 +196,7 @@ func TestGoalDashboardBuildsAggregates(t *testing.T) {
 
 func TestGoalCreateAndListFlow(t *testing.T) {
 	handler, e := setupTestGoalHandler(t)
-	body := bytes.NewBufferString(`{"name":"读书","goal_type":"quantity","unit":"本","annual_target":24}`)
+	body := bytes.NewBufferString(`{"name":"读书","unit":"本","annual_target":24}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/goals", body)
 	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	rec := httptest.NewRecorder()
@@ -187,15 +220,15 @@ func TestGoalCreateAndListFlow(t *testing.T) {
 	require.NoError(t, json.Unmarshal(listRec.Body.Bytes(), &payload))
 	require.Len(t, payload.Goals, 1)
 	assert.Equal(t, "读书", payload.Goals[0].Name)
-	assert.Equal(t, models.GoalTypeQuantity, payload.Goals[0].GoalType)
+	assert.Equal(t, "本", payload.Goals[0].Unit)
 }
 
 func TestGoalUpdateSupportsEditingAnnualTarget(t *testing.T) {
 	handler, e := setupTestGoalHandler(t)
 	annualTarget := 12.0
-	seedGoals(t, []models.Goal{{Name: "看电影", GoalType: models.GoalTypeCheckbox, AnnualTarget: &annualTarget, IsActive: true, SortOrder: 1}})
+	seedGoals(t, []models.Goal{{Name: "看电影", Description: "每周看一部", AnnualTarget: &annualTarget, IsActive: true, SortOrder: 1}})
 
-	body := bytes.NewBufferString(`{"name":"电影清单","annual_target":18}`)
+	body := bytes.NewBufferString(`{"name":"电影清单","description":"按主题看片","annual_target":18}`)
 	req := httptest.NewRequest(http.MethodPut, "/api/goals/1", body)
 	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	rec := httptest.NewRecorder()
@@ -210,13 +243,14 @@ func TestGoalUpdateSupportsEditingAnnualTarget(t *testing.T) {
 	var updated models.Goal
 	require.NoError(t, db.DB.First(&updated, 1).Error)
 	assert.Equal(t, "电影清单", updated.Name)
+	assert.Equal(t, "按主题看片", updated.Description)
 	require.NotNil(t, updated.AnnualTarget)
 	assert.Equal(t, 18.0, *updated.AnnualTarget)
 }
 
 func TestGoalDeleteMarksGoalInactive(t *testing.T) {
 	handler, e := setupTestGoalHandler(t)
-	seedGoals(t, []models.Goal{{Name: "早起拉伸", GoalType: models.GoalTypeCheckbox, IsActive: true, SortOrder: 1}})
+	seedGoals(t, []models.Goal{{Name: "早起拉伸", IsActive: true, SortOrder: 1}})
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/goals/1", nil)
 	rec := httptest.NewRecorder()
@@ -235,7 +269,7 @@ func TestGoalDeleteMarksGoalInactive(t *testing.T) {
 
 func TestGoalDeleteRecordRemovesExistingRecord(t *testing.T) {
 	handler, e := setupTestGoalHandler(t)
-	seedGoals(t, []models.Goal{{Name: "冥想", GoalType: models.GoalTypeCheckbox, IsActive: true, SortOrder: 1}})
+	seedGoals(t, []models.Goal{{Name: "冥想", IsActive: true, SortOrder: 1}})
 	recordDate := time.Now().AddDate(0, 0, -1).Format(goalDateLayout)
 	seedGoalRecords(t, []models.GoalRecord{{GoalID: 1, RecordDate: recordDate, IsCompleted: true}})
 
@@ -254,9 +288,9 @@ func TestGoalDeleteRecordRemovesExistingRecord(t *testing.T) {
 	assert.Equal(t, int64(0), count)
 }
 
-func TestGoalUpsertRecordRejectsQuantityForCheckboxGoal(t *testing.T) {
+func TestGoalUpsertRecordRejectsQuantityForGoalWithoutUnit(t *testing.T) {
 	handler, e := setupTestGoalHandler(t)
-	seedGoals(t, []models.Goal{{Name: "冥想", GoalType: models.GoalTypeCheckbox, IsActive: true, SortOrder: 1}})
+	seedGoals(t, []models.Goal{{Name: "冥想", IsActive: true, SortOrder: 1}})
 	recordDate := time.Now().AddDate(0, 0, -1).Format(goalDateLayout)
 
 	req := httptest.NewRequest(http.MethodPut, "/api/goals/1/records/"+recordDate, bytes.NewBufferString(`{"quantity":2}`))
@@ -268,15 +302,19 @@ func TestGoalUpsertRecordRejectsQuantityForCheckboxGoal(t *testing.T) {
 
 	err := handler.UpsertRecord(c)
 	require.NoError(t, err)
-	require.Equal(t, http.StatusBadRequest, rec.Code)
-	assert.JSONEq(t, `{"error":"该目标不需要填写数值"}`, rec.Body.String())
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var payload GoalRecordPayload
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload))
+	assert.True(t, payload.IsCompleted)
+	assert.Nil(t, payload.Quantity)
 }
 
 func TestGoalCreateCanReactivateInactiveGoal(t *testing.T) {
 	handler, e := setupTestGoalHandler(t)
-	seedInactiveGoal(t, models.Goal{ID: 1, Name: "旧目标", GoalType: models.GoalTypeCheckbox, SortOrder: 1})
+	seedInactiveGoal(t, models.Goal{ID: 1, Name: "旧目标", SortOrder: 1})
 
-	body := bytes.NewBufferString(`{"reactivate_id":1,"name":"冥想训练","goal_type":"checkbox","annual_target":180}`)
+	body := bytes.NewBufferString(`{"reactivate_id":1,"name":"冥想训练","annual_target":180}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/goals", body)
 	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	rec := httptest.NewRecorder()
@@ -296,8 +334,8 @@ func TestGoalCreateCanReactivateInactiveGoal(t *testing.T) {
 
 func TestGoalDashboardIncludesInactiveGoals(t *testing.T) {
 	handler, e := setupTestGoalHandler(t)
-	seedGoals(t, []models.Goal{{ID: 1, Name: "活跃目标", GoalType: models.GoalTypeCheckbox, IsActive: true, SortOrder: 1}})
-	seedInactiveGoal(t, models.Goal{ID: 2, Name: "已停用目标", GoalType: models.GoalTypeCheckbox, SortOrder: 2})
+	seedGoals(t, []models.Goal{{ID: 1, Name: "活跃目标", IsActive: true, SortOrder: 1}})
+	seedInactiveGoal(t, models.Goal{ID: 2, Name: "已停用目标", SortOrder: 2})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/goals/dashboard", nil)
 	rec := httptest.NewRecorder()
@@ -312,4 +350,32 @@ func TestGoalDashboardIncludesInactiveGoals(t *testing.T) {
 	require.Len(t, response.Goals, 1)
 	require.Len(t, response.InactiveGoals, 1)
 	assert.Equal(t, "已停用目标", response.InactiveGoals[0].Name)
+}
+
+func TestGoalYearSummaryReturnsAnnualTotals(t *testing.T) {
+	handler, e := setupTestGoalHandler(t)
+	seedGoals(t, []models.Goal{{ID: 1, Name: "活跃目标", IsActive: true, SortOrder: 1}})
+	seedInactiveGoal(t, models.Goal{ID: 2, Name: "历史目标", SortOrder: 2})
+	currentYear := today().Year()
+	seedGoalRecords(t, []models.GoalRecord{
+		{GoalID: 1, RecordDate: fmt.Sprintf("%d-01-03", currentYear), IsCompleted: true},
+		{GoalID: 1, RecordDate: fmt.Sprintf("%d-02-05", currentYear), IsCompleted: true},
+		{GoalID: 2, RecordDate: fmt.Sprintf("%d-02-05", currentYear), IsCompleted: true},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/goals/year-summary?year=%d", currentYear), nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	err := handler.YearSummary(c)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var response GoalYearSummaryResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response))
+	assert.Equal(t, currentYear, response.Year)
+	assert.True(t, response.HasRecords)
+	assert.Equal(t, 3, response.TotalCheckins)
+	assert.Equal(t, 2, response.RecordedGoalCount)
+	assert.Equal(t, 2, response.RecordedDays)
 }

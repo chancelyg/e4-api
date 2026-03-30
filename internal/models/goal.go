@@ -11,6 +11,7 @@ const (
 type Goal struct {
 	ID           uint         `gorm:"primaryKey" json:"id"`
 	Name         string       `gorm:"size:120;not null" json:"name"`
+	Description  string       `gorm:"size:500" json:"description"`
 	GoalType     string       `gorm:"size:24;not null;index" json:"goal_type"`
 	Unit         string       `gorm:"size:20" json:"unit"`
 	AnnualTarget *float64     `json:"annual_target"`

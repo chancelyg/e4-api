@@ -1,6 +1,9 @@
 package db
 
 import (
+	"log"
+	"time"
+
 	"e4-api/internal/config"
 	"e4-api/internal/models"
 
@@ -15,7 +18,12 @@ func Init() error {
 	var err error
 
 	DB, err = gorm.Open(sqlite.Open(config.Cfg.Database.DSN), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Silent),
+		Logger: logger.New(log.New(log.Writer(), "gorm ", log.LstdFlags|log.Lmicroseconds), logger.Config{
+			SlowThreshold:             200 * time.Millisecond,
+			LogLevel:                  logger.Warn,
+			IgnoreRecordNotFoundError: true,
+			Colorful:                  false,
+		}),
 	})
 	if err != nil {
 		return err

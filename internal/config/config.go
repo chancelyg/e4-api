@@ -1,12 +1,13 @@
 package config
 
 import (
+	"bufio"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 
 	"github.com/spf13/viper"
-	"github.com/subosito/gotenv"
 )
 
 const defaultAdminPasswordHash = "$2a$10$4ZPgUj01QYUd/4feVvRWKebBpHeWiHJQyJABYlTcycO6LiguI.Du2"
@@ -44,27 +45,39 @@ type SiteConfig struct {
 
 var Cfg *Config
 
+var sources = map[string]string{}
+
+type envBinding struct {
+	key         string
+	env         string
+	allowDotEnv bool
+}
+
+var envBindings = []envBinding{
+	{key: "server.host", env: "E4_SERVER_HOST", allowDotEnv: true},
+	{key: "server.port", env: "E4_SERVER_PORT", allowDotEnv: true},
+	{key: "server.mode", env: "E4_SERVER_MODE", allowDotEnv: true},
+	{key: "database.dsn", env: "E4_DATABASE_DSN"},
+	{key: "auth.username", env: "E4_AUTH_USERNAME"},
+	{key: "auth.password", env: "E4_AUTH_PASSWORD"},
+	{key: "auth.secret", env: "E4_AUTH_SECRET", allowDotEnv: true},
+	{key: "auth.totp_secret", env: "E4_AUTH_TOTP_SECRET"},
+	{key: "auth.rate_limit", env: "E4_AUTH_RATE_LIMIT"},
+	{key: "auth.lockout_minutes", env: "E4_AUTH_LOCKOUT_MINUTES"},
+	{key: "site.title", env: "E4_SITE_TITLE"},
+}
+
 func Load() error {
-	if err := loadDotEnvIfPresent(); err != nil {
+	existingEnv := captureExistingEnv(envBindings)
+	dotEnvEnv, err := loadDotEnvIfPresent(envBindings)
+	if err != nil {
 		return err
 	}
 
 	v := viper.New()
 
 	// Bind environment variables
-	if err := bindEnv(v,
-		"server.host", "E4_SERVER_HOST",
-		"server.port", "E4_SERVER_PORT",
-		"server.mode", "E4_SERVER_MODE",
-		"database.dsn", "E4_DATABASE_DSN",
-		"auth.username", "E4_AUTH_USERNAME",
-		"auth.password", "E4_AUTH_PASSWORD",
-		"auth.secret", "E4_AUTH_SECRET",
-		"auth.totp_secret", "E4_AUTH_TOTP_SECRET",
-		"auth.rate_limit", "E4_AUTH_RATE_LIMIT",
-		"auth.lockout_minutes", "E4_AUTH_LOCKOUT_MINUTES",
-		"site.title", "E4_SITE_TITLE",
-	); err != nil {
+	if err := bindEnv(v, envBindings...); err != nil {
 		return err
 	}
 
@@ -98,9 +111,24 @@ func Load() error {
 		return err
 	}
 
+	sources = map[string]string{
+		"server.host":          resolveSource(v, existingEnv, dotEnvEnv, "server.host", "E4_SERVER_HOST"),
+		"server.port":          resolveSource(v, existingEnv, dotEnvEnv, "server.port", "E4_SERVER_PORT"),
+		"server.mode":          resolveSource(v, existingEnv, dotEnvEnv, "server.mode", "E4_SERVER_MODE"),
+		"database.dsn":         resolveSource(v, existingEnv, dotEnvEnv, "database.dsn", "E4_DATABASE_DSN"),
+		"auth.username":        resolveSource(v, existingEnv, dotEnvEnv, "auth.username", "E4_AUTH_USERNAME"),
+		"auth.password":        resolveSource(v, existingEnv, dotEnvEnv, "auth.password", "E4_AUTH_PASSWORD"),
+		"auth.secret":          resolveSource(v, existingEnv, dotEnvEnv, "auth.secret", "E4_AUTH_SECRET"),
+		"auth.totp_secret":     resolveSource(v, existingEnv, dotEnvEnv, "auth.totp_secret", "E4_AUTH_TOTP_SECRET"),
+		"auth.rate_limit":      resolveSource(v, existingEnv, dotEnvEnv, "auth.rate_limit", "E4_AUTH_RATE_LIMIT"),
+		"auth.lockout_minutes": resolveSource(v, existingEnv, dotEnvEnv, "auth.lockout_minutes", "E4_AUTH_LOCKOUT_MINUTES"),
+		"site.title":           resolveSource(v, existingEnv, dotEnvEnv, "site.title", "E4_SITE_TITLE"),
+	}
+
 	Cfg.Server.Host = strings.TrimSpace(Cfg.Server.Host)
 	Cfg.Server.Mode = strings.TrimSpace(Cfg.Server.Mode)
 	Cfg.Auth.Username = strings.TrimSpace(Cfg.Auth.Username)
+	Cfg.Auth.Password = strings.TrimSpace(Cfg.Auth.Password)
 	Cfg.Auth.Secret = strings.TrimSpace(Cfg.Auth.Secret)
 	Cfg.Auth.TOTPSecret = strings.TrimSpace(Cfg.Auth.TOTPSecret)
 	Cfg.Site.Title = strings.TrimSpace(Cfg.Site.Title)
@@ -110,7 +138,7 @@ func Load() error {
 			return errors.New("release 模式必须设置非空的 auth.username")
 		}
 		if Cfg.Auth.Password == defaultAdminPasswordHash {
-			return errors.New("release 模式禁止使用默认管理员密码哈希，请通过 .env 或环境变量覆盖 auth.password")
+			return errors.New("release 模式禁止使用默认管理员密码哈希，请通过 config.yaml 覆盖 auth.password")
 		}
 		if Cfg.Auth.Secret == "" || Cfg.Auth.Secret == defaultDevAuthSecret {
 			return errors.New("release 模式必须修改 auth.secret")
@@ -120,22 +148,173 @@ func Load() error {
 	return nil
 }
 
-func loadDotEnvIfPresent() error {
-	if _, err := os.Stat(".env"); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
+func loadDotEnvIfPresent(bindings []envBinding) (map[string]struct{}, error) {
+	loaded := make(map[string]struct{})
+	allowed := make(map[string]struct{})
+	for _, binding := range bindings {
+		if binding.allowDotEnv {
+			allowed[binding.env] = struct{}{}
 		}
-		return err
 	}
 
-	return gotenv.Load(".env")
+	if _, err := os.Stat(".env"); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return loaded, nil
+		}
+		return nil, err
+	}
+
+	file, err := os.Open(".env")
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for lineNo := 1; scanner.Scan(); lineNo++ {
+		key, value, ok, err := parseDotEnvLine(scanner.Text())
+		if err != nil {
+			return nil, fmt.Errorf("parse .env line %d: %w", lineNo, err)
+		}
+		if !ok {
+			continue
+		}
+		if _, permitted := allowed[key]; !permitted {
+			continue
+		}
+		if _, exists := os.LookupEnv(key); exists {
+			continue
+		}
+		if err := os.Setenv(key, value); err != nil {
+			return nil, err
+		}
+		loaded[key] = struct{}{}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	return loaded, nil
 }
 
-func bindEnv(v *viper.Viper, values ...string) error {
-	for i := 0; i < len(values); i += 2 {
-		if err := v.BindEnv(values[i], values[i+1]); err != nil {
+func bindEnv(v *viper.Viper, bindings ...envBinding) error {
+	for _, binding := range bindings {
+		if err := v.BindEnv(binding.key, binding.env); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func Source(key string) string {
+	if source, ok := sources[key]; ok {
+		return source
+	}
+	return "unknown"
+}
+
+func UsesDefaultAdminPasswordHash() bool {
+	return Cfg != nil && Cfg.Auth.Password == defaultAdminPasswordHash
+}
+
+func UsesDefaultDevAuthSecret() bool {
+	return Cfg != nil && Cfg.Auth.Secret == defaultDevAuthSecret
+}
+
+func captureExistingEnv(bindings []envBinding) map[string]struct{} {
+	existing := make(map[string]struct{}, len(bindings))
+	for _, binding := range bindings {
+		if _, ok := os.LookupEnv(binding.env); ok {
+			existing[binding.env] = struct{}{}
+		}
+	}
+	return existing
+}
+
+func resolveSource(v *viper.Viper, existingEnv, dotEnvEnv map[string]struct{}, key, envName string) string {
+	if envName != "" {
+		if _, ok := existingEnv[envName]; ok {
+			return "env"
+		}
+		if _, ok := dotEnvEnv[envName]; ok {
+			return ".env"
+		}
+	}
+	if v.InConfig(key) {
+		return "config.yaml"
+	}
+	return "default"
+}
+
+func parseDotEnvLine(line string) (key, value string, ok bool, err error) {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+		return "", "", false, nil
+	}
+
+	trimmed = strings.TrimPrefix(trimmed, "export ")
+	separator := strings.Index(trimmed, "=")
+	if separator <= 0 {
+		return "", "", false, fmt.Errorf("invalid assignment")
+	}
+
+	key = strings.TrimSpace(trimmed[:separator])
+	if key == "" {
+		return "", "", false, fmt.Errorf("empty key")
+	}
+
+	value, err = parseDotEnvValue(strings.TrimSpace(trimmed[separator+1:]))
+	if err != nil {
+		return "", "", false, err
+	}
+
+	return key, value, true, nil
+}
+
+func parseDotEnvValue(raw string) (string, error) {
+	if raw == "" {
+		return "", nil
+	}
+
+	if raw[0] == '\'' || raw[0] == '"' {
+		quote := raw[0]
+		if len(raw) < 2 {
+			return "", fmt.Errorf("unterminated quoted value")
+		}
+		end := -1
+		escaped := false
+		for i := 1; i < len(raw); i++ {
+			if quote == '"' && raw[i] == '\\' && !escaped {
+				escaped = true
+				continue
+			}
+			if raw[i] == quote && !escaped {
+				end = i
+				break
+			}
+			escaped = false
+		}
+		if end == -1 {
+			return "", fmt.Errorf("unterminated quoted value")
+		}
+
+		trailing := strings.TrimSpace(raw[end+1:])
+		if trailing != "" && !strings.HasPrefix(trailing, "#") {
+			return "", fmt.Errorf("unexpected trailing content")
+		}
+
+		value := raw[1:end]
+		if quote == '"' {
+			replacer := strings.NewReplacer(`\\`, `\`, `\n`, "\n", `\r`, "\r", `\t`, "\t", `\"`, `"`)
+			value = replacer.Replace(value)
+		}
+		return value, nil
+	}
+
+	if comment := strings.Index(raw, " #"); comment >= 0 {
+		raw = raw[:comment]
+	}
+
+	return strings.TrimSpace(raw), nil
 }

@@ -9,8 +9,8 @@
 
 ## 配置分层建议
 
-- `config.yaml`: 提交到仓库的非敏感默认配置，适合本地开发和通用默认值
-- `.env`: 不提交到仓库的部署配置，放账号、密码哈希、会话密钥、数据库路径等敏感项
+- `config.yaml`: 主要放数据库、管理员用户名、bcrypt 密码哈希、TOTP 配置、限流参数、站点标题
+- `.env`: 主要放服务监听参数和会话密钥
 - 显式环境变量: 优先级最高，适合 CI/CD 或容器平台注入
 
 当前加载优先级:
@@ -45,9 +45,24 @@ sudo chown -R e4:e4 /opt/e4-api
 
 - `E4_SERVER_MODE=release`
 - `E4_SERVER_HOST=127.0.0.1`
-- `E4_AUTH_USERNAME`
-- `E4_AUTH_PASSWORD`
 - `E4_AUTH_SECRET`
+
+同时在 `/opt/e4-api/config.yaml` 中确认至少包含：
+
+```yaml
+database:
+  dsn: ./data/app.db
+
+auth:
+  username: admin
+  password: "<your-bcrypt-hash>"
+  totp_secret: ""
+  rate_limit: 5
+  lockout_minutes: 15
+
+site:
+  title: E4 Diary
+```
 
 4. 安装 systemd 服务
 
@@ -93,7 +108,7 @@ sudo systemctl reload nginx
 ## 公网部署安全检查清单
 
 - 不要提交真实 `.env`
-- 不要在 `config.yaml` 中写生产凭据
+- `config.yaml` 可以写生产用 bcrypt 密码哈希，但不要把文件提交回仓库
 - 生产环境必须使用独立用户名、bcrypt 密码哈希、随机会话密钥
 - 建议启用 TOTP 二步验证
 - Nginx 只转发到 `127.0.0.1:8080`

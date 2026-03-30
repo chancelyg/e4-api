@@ -4,64 +4,101 @@
 	import { auth } from '$lib/stores.svelte';
 	import {
 		goalsAPI,
-		type GoalCalendarDay,
 		type GoalDashboard,
 		type GoalDashboardItem,
-		type GoalRange,
-		type GoalType
+		type GoalPeriodDetail,
+		type GoalYearSummary
 	} from '$lib/api';
-	import { formatLongDate, formatMonthLabel, formatWeekday, getTodayDateString, getYesterdayDateString, shiftMonth } from '$lib/date';
+	import { formatLongDate, getTodayDateString, getYesterdayDateString } from '$lib/date';
 
 	type GoalFormState = {
 		reactivateId: string;
 		name: string;
-		goalType: GoalType;
+		description: string;
 		unit: string;
 		annualTarget: string | number;
 		weeklyTarget: string | number;
 	};
 
-	type CalendarCell =
-		| { kind: 'blank'; key: string }
-		| { kind: 'day'; key: string; day: GoalCalendarDay };
+	type DeleteState = {
+		goal: GoalDashboardItem | null;
+		nameInput: string;
+		error: string;
+	};
 
-	const rangeOptions: { value: GoalRange; label: string }[] = [
-		{ value: 'week', label: '周' },
-		{ value: 'month', label: '月' },
-		{ value: 'quarter', label: '季' },
-		{ value: 'year', label: '年' },
-		{ value: 'all', label: '全部' }
-	];
+	type CheckinDraft = {
+		checked: boolean;
+		quantity: string;
+		originalChecked: boolean;
+		originalQuantity: string;
+	};
+
+	type MonthlyAggregate = {
+		goalId: number;
+		name: string;
+		unit: string;
+		total: number;
+	};
+
+	function getCurrentYear() {
+		return new Date().getFullYear();
+	}
+
+	function getStartOfCurrentYearDateString() {
+		return `${getCurrentYear()}-01-01`;
+	}
+
+	function getDefaultCheckinDateString() {
+		const yesterday = getYesterdayDateString();
+		return yesterday < getStartOfCurrentYearDateString() ? getStartOfCurrentYearDateString() : yesterday;
+	}
+
+	function shiftDate(dateStr: string, delta: number): string {
+		const [year, month, day] = dateStr.split('-').map(Number);
+		const next = new Date(year, month - 1, day);
+		next.setDate(next.getDate() + delta);
+		const nextYear = next.getFullYear();
+		const nextMonth = `${next.getMonth() + 1}`.padStart(2, '0');
+		const nextDay = `${next.getDate()}`.padStart(2, '0');
+		return `${nextYear}-${nextMonth}-${nextDay}`;
+	}
 
 	let dashboard = $state<GoalDashboard | null>(null);
+	let previousYearSummary = $state<GoalYearSummary | null>(null);
+	let previousYear = $state(getCurrentYear() - 1);
 	let isLoading = $state(true);
 	let isRefreshing = $state(false);
 	let isSaving = $state(false);
 	let isMutating = $state(false);
+	let isYearSummaryLoading = $state(false);
 	let error = $state('');
-	let selectedRange = $state<GoalRange>('month');
 	let anchorDate = $state(getTodayDateString());
-	let checkinDate = $state(getYesterdayDateString());
-	let calendarMonth = $state(anchorDate.slice(0, 7));
-	let selectedDate = $state(getYesterdayDateString());
+	let checkinDate = $state(getDefaultCheckinDateString());
 	let showFormModal = $state(false);
+	let showDeleteModal = $state(false);
 	let isEditing = $state(false);
 	let editingGoalId = $state<number | null>(null);
 	let formError = $state('');
 	let quantityDrafts = $state<Record<number, string>>({});
+	let checkinDrafts = $state<Record<number, CheckinDraft>>({});
 	let goalForm = $state<GoalFormState>(emptyGoalForm());
+	let deleteState = $state<DeleteState>({ goal: null, nameInput: '', error: '' });
 
 	onMount(() => {
 		void initPage();
 	});
 
 	$effect(() => {
-		if (!showFormModal) {
+		if (!showFormModal && !showDeleteModal) {
 			return;
 		}
 
 		const handleKeydown = (event: KeyboardEvent) => {
 			if (event.key === 'Escape') {
+				if (showDeleteModal) {
+					closeDeleteModal();
+					return;
+				}
 				closeFormModal();
 			}
 		};
@@ -77,6 +114,7 @@
 			return;
 		}
 		await loadDashboard();
+		await loadPreviousYearSummary(previousYear);
 	}
 
 	async function loadDashboard(options?: { silent?: boolean }) {
@@ -90,17 +128,11 @@
 
 		try {
 			const result = await goalsAPI.dashboard({
-				range: selectedRange,
 				date: anchorDate,
-				checkin_date: checkinDate,
-				month: calendarMonth
+				checkin_date: checkinDate
 			});
 			dashboard = result;
 			checkinDate = result.checkin_date;
-			calendarMonth = result.calendar_month;
-			if (!findDayDetail(selectedDate)) {
-				selectedDate = result.checkin_date;
-			}
 			initializeQuantityDrafts(result.goals);
 		} catch (err) {
 			error = err instanceof Error ? err.message : '加载目标面板失败';
@@ -113,21 +145,44 @@
 		}
 	}
 
+	async function loadPreviousYearSummary(year: number) {
+		isYearSummaryLoading = true;
+		try {
+			const result = await goalsAPI.yearSummary(year);
+			previousYearSummary = result.has_records ? result : null;
+		} catch (err) {
+			error = err instanceof Error ? err.message : '加载往年统计失败';
+			previousYearSummary = null;
+		} finally {
+			isYearSummaryLoading = false;
+		}
+	}
+
 	function initializeQuantityDrafts(goals: GoalDashboardItem[]) {
 		const nextDrafts: Record<number, string> = {};
+		const nextCheckinDrafts: Record<number, CheckinDraft> = {};
 		for (const goal of goals) {
-			if (goal.goal_type === 'quantity') {
-				nextDrafts[goal.id] = goal.checkin_record?.quantity?.toString() ?? '';
+			const quantity = goal.checkin_record?.quantity?.toString() ?? '';
+			const checked = !!goal.checkin_record;
+			nextCheckinDrafts[goal.id] = {
+				checked,
+				quantity,
+				originalChecked: checked,
+				originalQuantity: quantity
+			};
+			if (goal.unit) {
+				nextDrafts[goal.id] = quantity;
 			}
 		}
 		quantityDrafts = nextDrafts;
+		checkinDrafts = nextCheckinDrafts;
 	}
 
 	function emptyGoalForm(): GoalFormState {
 		return {
 			reactivateId: '',
 			name: '',
-			goalType: 'checkbox',
+			description: '',
 			unit: '',
 			annualTarget: '',
 			weeklyTarget: ''
@@ -146,7 +201,7 @@
 		goalForm = {
 			reactivateId: '',
 			name: goal.name,
-			goalType: goal.goal_type,
+			description: goal.description,
 			unit: goal.unit,
 			annualTarget: goal.annual_target?.toString() ?? '',
 			weeklyTarget: goal.weekly_target?.toString() ?? ''
@@ -162,6 +217,16 @@
 		formError = '';
 	}
 
+	function openDeleteModal(goal: GoalDashboardItem) {
+		deleteState = { goal, nameInput: '', error: '' };
+		showDeleteModal = true;
+	}
+
+	function closeDeleteModal() {
+		showDeleteModal = false;
+		deleteState = { goal: null, nameInput: '', error: '' };
+	}
+
 	async function handleGoalSubmit(event: Event) {
 		event.preventDefault();
 		formError = '';
@@ -171,13 +236,14 @@
 			const reactivateId = goalForm.reactivateId ? Number(goalForm.reactivateId) : undefined;
 			const reactivatedGoal = reactivateId ? dashboard?.inactive_goals.find((goal) => goal.id === reactivateId) ?? null : null;
 			const annualTarget = parseOptionalNumber(goalForm.annualTarget);
+			const weeklyTarget = parseOptionalInt(goalForm.weeklyTarget);
 			const payload = {
 				reactivate_id: reactivateId,
 				name: (reactivatedGoal?.name ?? goalForm.name).trim(),
-				goal_type: reactivatedGoal?.goal_type ?? goalForm.goalType,
-				unit: (reactivatedGoal?.goal_type ?? goalForm.goalType) === 'quantity' ? (reactivatedGoal?.unit ?? goalForm.unit).trim() : undefined,
+				description: (reactivatedGoal?.description ?? goalForm.description).trim() || undefined,
+				unit: (reactivatedGoal?.unit ?? goalForm.unit).trim() || undefined,
 				annual_target: isEditing ? (annualTarget ?? 0) : annualTarget,
-				weekly_target: (reactivatedGoal?.goal_type ?? goalForm.goalType) === 'frequency' ? parseOptionalInt(goalForm.weeklyTarget) : undefined
+				weekly_target: weeklyTarget
 			};
 
 			if (isEditing && editingGoalId !== null) {
@@ -188,6 +254,7 @@
 
 			closeFormModal();
 			await loadDashboard({ silent: true });
+			await loadPreviousYearSummary(previousYear);
 		} catch (err) {
 			formError = err instanceof Error ? err.message : '保存目标失败';
 		} finally {
@@ -195,65 +262,98 @@
 		}
 	}
 
-	async function handleGoalDelete(goal: GoalDashboardItem) {
-		if (!confirm(`停用目标“${goal.name}”？历史记录会保留。`)) {
+	async function confirmDeleteGoal() {
+		if (!deleteState.goal) {
+			return;
+		}
+		if (deleteState.nameInput.trim() !== deleteState.goal.name) {
+			deleteState = { ...deleteState, error: '请输入完全一致的目标名称后再删除' };
 			return;
 		}
 
 		isMutating = true;
 		try {
-			await goalsAPI.delete(goal.id);
+			await goalsAPI.delete(deleteState.goal.id);
+			closeDeleteModal();
 			await loadDashboard({ silent: true });
+			await loadPreviousYearSummary(previousYear);
 		} catch (err) {
-			error = err instanceof Error ? err.message : '停用目标失败';
+			deleteState = {
+				...deleteState,
+				error: err instanceof Error ? err.message : '删除目标失败'
+			};
 		} finally {
 			isMutating = false;
 		}
 	}
 
-	async function toggleCheckin(goal: GoalDashboardItem) {
-		isMutating = true;
-		try {
-			if (goal.checkin_record) {
-				await goalsAPI.deleteRecord(goal.id, checkinDate);
-			} else {
-				await goalsAPI.upsertRecord(goal.id, checkinDate);
+	function toggleCheckin(goal: GoalDashboardItem) {
+		const current = checkinDrafts[goal.id];
+		if (!current) return;
+		checkinDrafts = {
+			...checkinDrafts,
+			[goal.id]: {
+				...current,
+				checked: !current.checked
 			}
-			await loadDashboard({ silent: true });
-		} catch (err) {
-			error = err instanceof Error ? err.message : '更新打卡失败';
-		} finally {
-			isMutating = false;
-		}
+		};
 	}
 
-	async function saveQuantity(goal: GoalDashboardItem) {
-		const quantity = Number(quantityDrafts[goal.id]);
-		if (!Number.isFinite(quantity) || quantity <= 0) {
-			error = '请输入大于 0 的数量';
-			return;
-		}
-
-		isMutating = true;
-		try {
-			await goalsAPI.upsertRecord(goal.id, checkinDate, { quantity });
-			await loadDashboard({ silent: true });
-		} catch (err) {
-			error = err instanceof Error ? err.message : '保存数量失败';
-		} finally {
-			isMutating = false;
-		}
+	function updateQuantityDraft(goalId: number, value: string) {
+		quantityDrafts = { ...quantityDrafts, [goalId]: value };
+		const current = checkinDrafts[goalId];
+		if (!current) return;
+		checkinDrafts = {
+			...checkinDrafts,
+			[goalId]: {
+				...current,
+				quantity: value,
+				checked: value.trim() !== ''
+			}
+		};
 	}
 
-	async function clearQuantity(goal: GoalDashboardItem) {
-		if (!goal.checkin_record) return;
-
+	async function saveCheckins() {
 		isMutating = true;
 		try {
-			await goalsAPI.deleteRecord(goal.id, checkinDate);
+			for (const goal of dashboard?.goals ?? []) {
+				const draft = checkinDrafts[goal.id];
+				if (!draft) {
+					continue;
+				}
+
+				const changed = draft.checked !== draft.originalChecked || draft.quantity !== draft.originalQuantity;
+				if (!changed) {
+					continue;
+				}
+
+				if (goal.unit) {
+					if (!draft.checked || draft.quantity.trim() === '') {
+						if (draft.originalChecked) {
+							await goalsAPI.deleteRecord(goal.id, checkinDate);
+						}
+						continue;
+					}
+
+					const quantity = Number(draft.quantity);
+					if (!Number.isFinite(quantity) || quantity <= 0) {
+						throw new Error(`请输入目标“${goal.name}”的大于 0 的数量`);
+					}
+					await goalsAPI.upsertRecord(goal.id, checkinDate, { quantity });
+					continue;
+				}
+
+				if (draft.checked) {
+					await goalsAPI.upsertRecord(goal.id, checkinDate);
+				} else if (draft.originalChecked) {
+					await goalsAPI.deleteRecord(goal.id, checkinDate);
+				}
+			}
+
 			await loadDashboard({ silent: true });
+			await loadPreviousYearSummary(previousYear);
 		} catch (err) {
-			error = err instanceof Error ? err.message : '清除打卡失败';
+			error = err instanceof Error ? err.message : '保存打卡失败';
 		} finally {
 			isMutating = false;
 		}
@@ -286,114 +386,87 @@
 		goalForm = {
 			reactivateId: value,
 			name: inactiveGoal.name,
-			goalType: inactiveGoal.goal_type,
+			description: inactiveGoal.description,
 			unit: inactiveGoal.unit,
 			annualTarget: inactiveGoal.annual_target?.toString() ?? '',
 			weeklyTarget: inactiveGoal.weekly_target?.toString() ?? ''
 		};
 	}
 
-	function findDayDetail(date: string) {
-		return dashboard?.day_details.find((item) => item.date === date) ?? null;
-	}
-
-	function selectDate(date: string) {
-		selectedDate = date;
-	}
-
-	function changeRange(range: GoalRange) {
-		selectedRange = range;
-		void loadDashboard({ silent: true });
-	}
-
-	function switchCheckinDate(nextDate: string) {
+	function switchCheckinDate(delta: number) {
+		const nextDate = shiftDate(checkinDate, delta);
+		if (nextDate < getStartOfCurrentYearDateString()) {
+			return;
+		}
+		if (nextDate > getTodayDateString()) {
+			return;
+		}
 		checkinDate = nextDate;
-		selectedDate = nextDate;
 		void loadDashboard({ silent: true });
 	}
 
-	function previousMonth() {
-		calendarMonth = shiftMonth(calendarMonth, -1);
-		void loadDashboard({ silent: true });
+	function loadEarlierYear() {
+		previousYear -= 1;
+		void loadPreviousYearSummary(previousYear);
 	}
 
-	function nextMonth() {
-		calendarMonth = shiftMonth(calendarMonth, 1);
-		void loadDashboard({ silent: true });
+	function loadLaterYear() {
+		if (previousYear >= getCurrentYear() - 1) {
+			return;
+		}
+		previousYear += 1;
+		void loadPreviousYearSummary(previousYear);
 	}
 
 	function getProgressStyle(percent: number | null) {
 		return `width: ${Math.max(0, Math.min(percent ?? 0, 100))}%`;
 	}
 
-	function getIntensityClass(level: number) {
-		return `level-${level}`;
-	}
-
-	function getRangeLabel(range: GoalRange) {
-		return rangeOptions.find((item) => item.value === range)?.label ?? '月';
-	}
-
-	function formatRangeStat(goal: GoalDashboardItem) {
-		if (goal.goal_type === 'quantity') {
-			return `${goal.range_quantity_total}${goal.unit || ''}`;
-		}
-		return `${goal.range_completed_count} 次`;
-	}
-
 	function formatAnnualSummary(goal: GoalDashboardItem) {
-		if (goal.goal_type === 'quantity') {
+		if (goal.unit) {
 			if (goal.annual_target !== null) {
 				return `${goal.annual_quantity_total}/${goal.annual_target}${goal.unit}`;
 			}
 			return `本年 ${goal.annual_quantity_total}${goal.unit}`;
 		}
 
-		if (goal.goal_type === 'frequency') {
-			if (goal.annual_target !== null) {
-				return `${goal.annual_completed_count}/${goal.annual_target} 次`;
-			}
-			return `本年 ${goal.annual_completed_count} 次`;
+		if (goal.annual_target !== null) {
+			return `${goal.annual_completed_count}/${goal.annual_target} 次`;
 		}
-
 		return `本年 ${goal.annual_completed_count} 次`;
 	}
 
-	function getCheckinCompletedCount() {
-		return dashboard?.goals.filter((goal) => goal.checkin_record).length ?? 0;
+	function formatPeriodItem(item: GoalPeriodDetail['items'][number]) {
+		if (item.unit) {
+			return item.quantity !== null ? `${item.quantity}${item.unit}` : '已记录';
+		}
+		return item.is_completed ? '已完成' : '未完成';
 	}
 
-	function getAnnualTargetCount() {
-		return dashboard?.goals.filter((goal) => goal.annual_target !== null).length ?? 0;
-	}
-
-	function getRangeHighlightCount() {
-		return dashboard?.goals.filter((goal) => goal.range_completed_count > 0 || goal.range_quantity_total > 0).length ?? 0;
-	}
-
-	function buildCalendarCells(days: GoalCalendarDay[] | undefined): CalendarCell[] {
-		if (!days || days.length === 0) {
-			return [];
+	function buildMonthlyAggregates(details: GoalPeriodDetail[]): MonthlyAggregate[] {
+		const aggregates = new Map<number, MonthlyAggregate>();
+		for (const detail of details) {
+			for (const item of detail.items) {
+				const current = aggregates.get(item.goal_id) ?? {
+					goalId: item.goal_id,
+					name: item.name,
+					unit: item.unit,
+					total: 0
+				};
+				current.total += item.unit ? item.quantity ?? 0 : item.is_completed ? 1 : 0;
+				aggregates.set(item.goal_id, current);
+			}
 		}
 
-		const firstDay = new Date(`${days[0].date}T00:00:00`);
-		const leadingBlanks = (firstDay.getDay() + 6) % 7;
-		const cells: CalendarCell[] = [];
-
-		for (let index = 0; index < leadingBlanks; index += 1) {
-			cells.push({ kind: 'blank', key: `blank-${index}` });
-		}
-
-		for (const day of days) {
-			cells.push({ kind: 'day', key: day.date, day });
-		}
-
-		return cells;
+		return Array.from(aggregates.values()).sort((a, b) => b.total - a.total);
 	}
 
-	const selectedDayDetail = $derived(findDayDetail(selectedDate));
+	function hasPendingCheckinChanges() {
+		return Object.values(checkinDrafts).some((draft) => draft.checked !== draft.originalChecked || draft.quantity !== draft.originalQuantity);
+	}
+
 	const hasGoals = $derived((dashboard?.goals.length ?? 0) > 0);
-	const calendarCells = $derived(buildCalendarCells(dashboard?.calendar_days));
+	const monthlyAggregates = $derived(buildMonthlyAggregates(dashboard?.month_details ?? []));
 </script>
 
 <div class="goals-page">
@@ -413,241 +486,261 @@
 				<div class="refresh-indicator" aria-live="polite">正在更新视图...</div>
 			{/if}
 
-		<section class="goals-hero card">
-			<div>
-				<p class="goals-kicker">Goals Dashboard</p>
-				<h1>目标打卡</h1>
-				<p class="goals-copy">把年度目标、昨日回顾和阶段表现放在一个页面里，快速看到差距与节奏。</p>
-			</div>
-			<div class="hero-actions">
-				<div class="hero-date-chip">
-					<span>锚点日期</span>
-					<strong>{anchorDate}</strong>
-				</div>
-				<button class="btn variant-filled-primary" type="button" onclick={openCreateModal}>新增目标</button>
-			</div>
-		</section>
-
-		{#if !hasGoals}
-			<section class="empty-goals card">
-				<h2>还没有目标</h2>
-				<p>先创建几个想长期坚持的目标，再开始昨天/今天的回顾打卡。</p>
-				<button class="btn variant-filled-primary" type="button" onclick={openCreateModal}>创建第一个目标</button>
-			</section>
-		{:else}
-			<section class="overview-strip">
-				<article class="overview-stat card">
-					<p>活跃目标</p>
-					<strong>{dashboard.goals.length}</strong>
-					<span>维持一个小而稳定的年度清单</span>
-				</article>
-				<article class="overview-stat card">
-					<p>{checkinDate === getYesterdayDateString() ? '昨日已记录' : '今日已记录'}</p>
-					<strong>{getCheckinCompletedCount()}</strong>
-					<span>共 {dashboard.goals.length} 项目标</span>
-				</article>
-				<article class="overview-stat card">
-					<p>年度目标</p>
-					<strong>{getAnnualTargetCount()}</strong>
-					<span>显示年度进度条与剩余差距</span>
-				</article>
-				<article class="overview-stat card">
-					<p>{getRangeLabel(selectedRange)}度活跃</p>
-					<strong>{getRangeHighlightCount()}</strong>
-					<span>{dashboard.range_start_date} - {dashboard.range_end_date}</span>
-				</article>
-			</section>
-
-			<section class="goal-progress-grid">
-				{#each dashboard.goals as goal (goal.id)}
-					<article class:goal-card-strong={!!goal.checkin_record} class="goal-progress-card card">
-						<div class="goal-progress-head">
-							<div>
-								<p class="goal-type-label">{goal.goal_type === 'checkbox' ? '坚持型' : goal.goal_type === 'quantity' ? '数值累计' : '频率型'}</p>
-								<h2>{goal.name}</h2>
-							</div>
-							<div class="goal-card-actions">
-								<button class="btn btn-sm variant-soft-surface" type="button" onclick={() => openEditModal(goal)}>编辑</button>
-								<button class="btn btn-sm btn-quiet" type="button" onclick={() => handleGoalDelete(goal)} disabled={isMutating}>停用</button>
-							</div>
-						</div>
-
-						<div class="goal-progress-bar">
-							<span class="goal-progress-fill" style={getProgressStyle(goal.annual_progress_percent ?? goal.current_week_progress_percent ?? 0)}></span>
-						</div>
-
-						<div class="goal-progress-meta">
-							<strong>{formatAnnualSummary(goal)}</strong>
-							{#if goal.annual_remaining_value !== null}
-								<span>还差 {goal.annual_remaining_value}{goal.goal_type === 'quantity' ? goal.unit : ' 次'}</span>
-							{:else if goal.current_week_progress_percent !== null && goal.weekly_target !== null}
-								<span>本周 {goal.current_week_completed_count}/{goal.weekly_target} · {goal.current_week_progress_percent}%</span>
-							{:else}
-								<span>{selectedRange === 'all' ? '全部范围' : `本${getRangeLabel(selectedRange)}`} {formatRangeStat(goal)}</span>
-							{/if}
-						</div>
-
-						<div class="goal-card-footer">
-							<p class="goal-range-note">当前范围：{formatRangeStat(goal)}</p>
-							{#if goal.goal_type === 'frequency' && goal.weekly_target !== null}
-								<span class="goal-inline-pill">周目标 {goal.weekly_target} 次</span>
-							{:else if goal.goal_type === 'quantity' && goal.unit}
-								<span class="goal-inline-pill">单位：{goal.unit}</span>
-							{/if}
-						</div>
-					</article>
-				{/each}
-			</section>
-
-			<section class="goals-controls card">
+			<section class="goals-hero card">
 				<div>
-					<p class="section-kicker">Check-in</p>
-					<h2>{formatLongDate(checkinDate)}</h2>
-					<p class="section-copy">只允许记录今天或昨天；这里默认展示昨天，适合早上回顾。完成的记录会直接停留在当前视图里，不再整页闪动。</p>
+					<p class="goals-kicker">Goals Dashboard</p>
+					<h1>目标</h1>
+					<p class="goals-copy">先完成今天最需要的打卡，再顺手回看今年的累计与节奏，目标管理尽量退到次要位置。</p>
 				</div>
-				<div class="checkin-switches">
-					<button class:active-chip={checkinDate === getYesterdayDateString()} class="btn variant-soft-surface" type="button" onclick={() => switchCheckinDate(getYesterdayDateString())}>昨天</button>
-					<button class:active-chip={checkinDate === getTodayDateString()} class="btn variant-soft-surface" type="button" onclick={() => switchCheckinDate(getTodayDateString())}>今天</button>
-					<div class="checkin-summary-chip">
-						<strong>{getCheckinCompletedCount()}</strong>
-						<span>/ {dashboard.goals.length} 已记录</span>
+				<div class="hero-actions">
+					<div class="hero-date-chip">
+						<span>今天</span>
+						<strong>{anchorDate}</strong>
 					</div>
 				</div>
 			</section>
 
-			<section class="checkin-list card">
-				{#each dashboard.goals as goal (goal.id)}
-					<div class="checkin-row">
+			{#if !hasGoals}
+				<section class="empty-goals card">
+					<h2>还没有目标</h2>
+					<p>先创建几个想长期坚持的目标，再开始打卡与年度回顾。</p>
+					<button class="btn variant-filled-primary" type="button" onclick={openCreateModal}>创建第一个目标</button>
+				</section>
+			{:else}
+				<section class="checkin-panel card">
+					<div class="section-head">
 						<div>
-							<p class="checkin-goal-name">{goal.name}</p>
-							<div class="checkin-tags">
-								<span class="goal-inline-pill">{goal.goal_type === 'checkbox' ? '坚持型' : goal.goal_type === 'quantity' ? '数值累计' : '频率型'}</span>
-								{#if goal.annual_target !== null}
-									<span class="goal-inline-pill subtle-pill">年度目标 {goal.annual_target}{goal.goal_type === 'quantity' ? goal.unit : ''}</span>
-								{/if}
-							</div>
-							<p class="checkin-goal-meta">
-								{#if goal.goal_type === 'quantity'}
-									本{getRangeLabel(selectedRange)} {goal.range_quantity_total}{goal.unit}
+							<p class="section-kicker">Check-in</p>
+							<h2>{formatLongDate(checkinDate)}</h2>
+							<p class="section-copy">默认从昨天开始，左右逐天调整。可回改今年内的记录，但不允许跨到去年或明天。</p>
+						</div>
+					<div class="date-stepper">
+						<button class="btn variant-soft-surface" type="button" onclick={() => switchCheckinDate(-1)} disabled={checkinDate <= getStartOfCurrentYearDateString()}>前一天</button>
+						<div class="checkin-summary-chip">
+							<strong>{dashboard.goals.filter((goal) => goal.checkin_record).length}</strong>
+							<span>/ {dashboard.goals.length} 已记录</span>
+						</div>
+						<button class="btn variant-soft-surface" type="button" onclick={() => switchCheckinDate(1)} disabled={checkinDate >= getTodayDateString()}>后一天</button>
+					</div>
+				</div>
+
+					<div class="checkin-list">
+						{#each dashboard.goals as goal (goal.id)}
+							<div class="checkin-row">
+								<div>
+									<p class="checkin-goal-name">{goal.name}</p>
+									{#if goal.description}
+										<p class="goal-description">{goal.description}</p>
+									{/if}
+									<div class="checkin-tags">
+										{#if goal.unit}
+											<span class="goal-inline-pill">单位：{goal.unit}</span>
+										{/if}
+										{#if goal.weekly_target !== null}
+											<span class="goal-inline-pill">周目标 {goal.weekly_target} 次</span>
+										{/if}
+										{#if goal.annual_target !== null}
+											<span class="goal-inline-pill subtle-pill">年度目标 {goal.annual_target}{goal.unit || ' 次'}</span>
+										{/if}
+									</div>
+								</div>
+
+								{#if goal.unit}
+									<div class="checkin-quantity">
+										<input class="input quantity-input" type="number" min="0" step="0.1" value={quantityDrafts[goal.id] ?? ''} oninput={(event) => updateQuantityDraft(goal.id, (event.currentTarget as HTMLInputElement).value)} placeholder={`输入${goal.unit}`} />
+									</div>
 								{:else}
-									本{getRangeLabel(selectedRange)} {goal.range_completed_count} 次
-								{/if}
-							</p>
-						</div>
-
-						{#if goal.goal_type === 'quantity'}
-							<div class="checkin-quantity">
-								<input class="input quantity-input" type="number" min="0" step="0.1" bind:value={quantityDrafts[goal.id]} placeholder={`输入${goal.unit}`} />
-								<button class="btn variant-filled-primary" type="button" onclick={() => saveQuantity(goal)} disabled={isMutating}>保存</button>
-								{#if goal.checkin_record}
-									<button class="btn variant-soft-surface" type="button" onclick={() => clearQuantity(goal)} disabled={isMutating}>清除</button>
-								{/if}
-								{#if goal.checkin_record?.quantity !== null && goal.checkin_record?.quantity !== undefined}
-									<span class="goal-inline-pill">已记 {goal.checkin_record.quantity}{goal.unit}</span>
+									<button class:checkin-done={!!checkinDrafts[goal.id]?.checked} class="checkin-toggle" type="button" onclick={() => toggleCheckin(goal)} disabled={isMutating}>
+										<span>{checkinDrafts[goal.id]?.checked ? '已完成' : '待记录'}</span>
+										<strong>{goal.weekly_target !== null ? `${goal.current_week_completed_count}/${goal.weekly_target}` : goal.checkin_record ? '✓' : '+'}</strong>
+									</button>
 								{/if}
 							</div>
-						{:else}
-							<button class:checkin-done={!!goal.checkin_record} class="checkin-toggle" type="button" onclick={() => toggleCheckin(goal)} disabled={isMutating}>
-								<span>{goal.checkin_record ? '已完成' : '待记录'}</span>
-								<strong>{goal.goal_type === 'frequency' && goal.weekly_target !== null ? `${goal.current_week_completed_count}/${goal.weekly_target}` : goal.checkin_record ? '✓' : '+'}</strong>
-							</button>
-						{/if}
-					</div>
-				{/each}
-			</section>
-
-			<section class="range-toolbar card">
-				<div>
-					<p class="section-kicker">Range</p>
-					<h2>{dashboard.range_start_date} - {dashboard.range_end_date}</h2>
-					<p class="section-copy">切换周、月、季、年与全部视图，重新查看每个目标的阶段表现。</p>
-				</div>
-				<div class="range-tabs">
-					{#each rangeOptions as option}
-						<button class:active-range={selectedRange === option.value} class="btn variant-soft-surface" type="button" onclick={() => changeRange(option.value)}>
-							{option.label}
-						</button>
-					{/each}
-				</div>
-			</section>
-
-			<section class="calendar-layout">
-				<div class="calendar-panel card">
-					<div class="calendar-head">
-						<div>
-							<p class="section-kicker">Calendar</p>
-							<h2>{formatMonthLabel(calendarMonth)}</h2>
-							<p class="section-copy">色块越深，代表那一天完成的目标越多。点某一天查看完整明细，右侧详情不会重新抖动。</p>
-						</div>
-						<div class="calendar-nav">
-							<button class="btn variant-soft-surface" type="button" onclick={previousMonth}>上个月</button>
-							<button class="btn variant-soft-surface" type="button" onclick={nextMonth}>下个月</button>
-						</div>
-					</div>
-
-					<div class="calendar-weekdays">
-						<span>一</span>
-						<span>二</span>
-						<span>三</span>
-						<span>四</span>
-						<span>五</span>
-						<span>六</span>
-						<span>日</span>
-					</div>
-
-					<div class="calendar-grid">
-						{#each calendarCells as cell (cell.key)}
-							{#if cell.kind === 'blank'}
-								<div class="calendar-blank" aria-hidden="true"></div>
-							{:else}
-								<button class:calendar-day-active={selectedDate === cell.day.date} class={`calendar-day ${getIntensityClass(cell.day.intensity)}`} type="button" onclick={() => selectDate(cell.day.date)}>
-									<span class="calendar-day-number">{Number(cell.day.date.slice(8, 10))}</span>
-									<small>{cell.day.completed_goals}/{cell.day.total_goals}</small>
-								</button>
-							{/if}
 						{/each}
 					</div>
 
-					<div class="calendar-legend">
-						<span><i class="legend-swatch level-0"></i>空白</span>
-						<span><i class="legend-swatch level-2"></i>部分完成</span>
-						<span><i class="legend-swatch level-4"></i>高完成度</span>
+					<div class="checkin-actions">
+						<button class="btn variant-filled-primary" type="button" onclick={saveCheckins} disabled={isMutating || !hasPendingCheckinChanges()}>
+							{isMutating ? '保存中...' : '保存本次打卡'}
+						</button>
 					</div>
-				</div>
+				</section>
 
-				<aside class="calendar-detail card">
-					{#if selectedDayDetail}
-						<p class="section-kicker">Day Detail</p>
-						<h2>{formatLongDate(selectedDayDetail.date)}</h2>
-						<p class="calendar-detail-summary">完成 {selectedDayDetail.completed_goals} / {selectedDayDetail.total_goals} 项 · {formatWeekday(selectedDayDetail.date)}</p>
-						<p class="calendar-detail-hint">左侧月历用于选择日期，右侧固定展示这一天的完整快照，便于安静回顾。</p>
+				<section class="stats-panel">
+					<div class="overview-strip">
+						<article class="overview-stat card">
+							<p>活跃目标</p>
+							<strong>{dashboard.goals.length}</strong>
+							<span>当前仍在推进的目标清单</span>
+						</article>
+						<article class="overview-stat card">
+							<p>今日打卡</p>
+							<strong>{dashboard.today_completed_count}</strong>
+							<span>今天已完成的目标数量</span>
+						</article>
+						<article class="overview-stat card">
+							<p>年度打卡</p>
+							<strong>{dashboard.annual_checkin_total}</strong>
+							<span>{dashboard.range_start_date} 到 {dashboard.range_end_date}</span>
+						</article>
+					</div>
 
-						<div class="calendar-detail-list">
-							{#each selectedDayDetail.items as item (item.goal_id)}
-								<div class:detail-done={item.is_completed} class="calendar-detail-item">
+					<section class="goal-progress-grid">
+						{#each dashboard.goals as goal (goal.id)}
+							<article class:goal-card-strong={!!goal.checkin_record} class="goal-progress-card card">
+								<div class="goal-progress-head">
 									<div>
-										<strong>{item.name}</strong>
-										<p>{item.goal_type === 'quantity' ? (item.quantity !== null ? `${item.quantity}${item.unit}` : '未记录') : item.is_completed ? '已完成' : '未完成'}</p>
+										<h2>{goal.name}</h2>
+										{#if goal.description}
+											<p class="goal-description">{goal.description}</p>
+										{/if}
 									</div>
-									<span>{item.is_completed ? '✓' : '·'}</span>
+									<div class="goal-card-actions">
+										<button class="btn btn-sm variant-soft-surface" type="button" onclick={() => openEditModal(goal)}>编辑</button>
+										<button class="btn btn-sm btn-quiet" type="button" onclick={() => openDeleteModal(goal)} disabled={isMutating}>删除</button>
+									</div>
 								</div>
-							{/each}
+
+								<div class="goal-progress-bar">
+									<span class="goal-progress-fill" style={getProgressStyle(goal.annual_progress_percent ?? goal.current_week_progress_percent ?? 0)}></span>
+								</div>
+
+								<div class="goal-progress-meta">
+									<strong>{formatAnnualSummary(goal)}</strong>
+									{#if goal.annual_remaining_value !== null}
+										<span>还差 {goal.annual_remaining_value}{goal.unit || ' 次'}</span>
+									{:else if goal.current_week_progress_percent !== null && goal.weekly_target !== null}
+										<span>本周 {goal.current_week_completed_count}/{goal.weekly_target} · {goal.current_week_progress_percent}%</span>
+									{:else}
+										<span>本年已累计 {goal.unit ? `${goal.annual_quantity_total}${goal.unit}` : `${goal.annual_completed_count} 次`}</span>
+									{/if}
+								</div>
+
+								<div class="goal-card-footer">
+									{#if goal.weekly_target !== null}
+										<span class="goal-inline-pill">周目标 {goal.weekly_target} 次</span>
+									{/if}
+									{#if goal.unit}
+										<span class="goal-inline-pill">单位：{goal.unit}</span>
+									{/if}
+									<span class="goal-inline-pill subtle-pill">今年打卡 {goal.annual_completed_count} 次</span>
+								</div>
+							</article>
+						{/each}
+					</section>
+
+					<section class="detail-grid">
+						<div class="detail-panel card">
+							<div class="detail-head">
+								<div>
+									<p class="section-kicker">Week Detail</p>
+									<h2>这周记录</h2>
+									<p class="section-copy">快速回看这周具体记录了哪些任务。</p>
+								</div>
+							</div>
+							{#if dashboard.week_details.length === 0}
+								<p class="text-surface-500">这周还没有记录。</p>
+							{:else}
+								<div class="period-detail-list">
+									{#each dashboard.week_details as detail (detail.date)}
+										<div class="period-day-block">
+											<div class="period-day-head">
+												<strong>{formatLongDate(detail.date)}</strong>
+												<span>{detail.completed_goals} 项</span>
+											</div>
+											{#each detail.items as item (item.goal_id)}
+												<div class="period-detail-item">
+													<span>{item.name}</span>
+													<small>{formatPeriodItem(item)}</small>
+												</div>
+											{/each}
+										</div>
+									{/each}
+								</div>
+							{/if}
 						</div>
-					{:else}
-						<p class="text-surface-500">选择某一天查看详细完成情况。</p>
-					{/if}
-				</aside>
-			</section>
-		{/if}
+
+						<div class="detail-panel card">
+							<div class="detail-head">
+								<div>
+									<p class="section-kicker">Month Detail</p>
+									<h2>本月记录</h2>
+									<p class="section-copy">按目标聚合本月累计，不再展开到每天的细节。</p>
+								</div>
+							</div>
+							{#if monthlyAggregates.length === 0}
+								<p class="text-surface-500">本月还没有记录。</p>
+							{:else}
+								<div class="period-detail-list">
+									{#each monthlyAggregates as item (item.goalId)}
+										<div class="period-day-block">
+											<div class="period-day-head">
+												<strong>{item.name}</strong>
+												<span>{item.unit ? `${item.total}${item.unit}` : `${item.total} 次`}</span>
+											</div>
+											<div class="period-detail-item">
+												<span>本月累计</span>
+												<small>{item.unit ? `${item.total}${item.unit}` : `${item.total} 次`}</small>
+											</div>
+										</div>
+									{/each}
+								</div>
+							{/if}
+						</div>
+					</section>
+				</section>
+
+				<section class="create-panel card">
+					<div>
+						<p class="section-kicker">New Goal</p>
+						<h2>新增目标</h2>
+						<p class="section-copy">新增是低频动作，放在页面最后。目标名称必填，备注、单位、年度目标和每周目标都可选。</p>
+					</div>
+					<button class="btn variant-filled-primary" type="button" onclick={openCreateModal}>新增目标</button>
+				</section>
+
+				{#if isYearSummaryLoading}
+					<section class="history-panel card">
+						<p class="text-surface-500">往年统计加载中...</p>
+					</section>
+				{:else if previousYearSummary}
+					<section class="history-panel card">
+						<div class="history-head">
+							<div>
+								<p class="section-kicker">History</p>
+								<h2>{previousYearSummary.year} 年统计</h2>
+								<p class="section-copy">如果往年有记录，就保留一个轻量年度回顾，支持继续往前翻。</p>
+							</div>
+							<div class="calendar-nav">
+								<button class="btn variant-soft-surface" type="button" onclick={loadEarlierYear}>更早一年</button>
+								<button class="btn variant-soft-surface" type="button" onclick={loadLaterYear} disabled={previousYear >= getCurrentYear() - 1}>更近一年</button>
+							</div>
+						</div>
+						<div class="overview-strip history-stats">
+							<article class="overview-stat card">
+								<p>累计打卡</p>
+								<strong>{previousYearSummary.total_checkins}</strong>
+								<span>{previousYearSummary.start_date} 到 {previousYearSummary.end_date}</span>
+							</article>
+							<article class="overview-stat card">
+								<p>记录目标</p>
+								<strong>{previousYearSummary.recorded_goal_count}</strong>
+								<span>这一年里留下记录的任务数</span>
+							</article>
+							<article class="overview-stat card">
+								<p>记录天数</p>
+								<strong>{previousYearSummary.recorded_days}</strong>
+								<span>这一年实际留下记录的日期数</span>
+							</article>
+						</div>
+					</section>
+				{/if}
+			{/if}
 		</div>
 	{/if}
 
 	{#if showFormModal}
-		<div
-			class="modal-backdrop"
-			role="presentation"
-			onclick={(event) => event.target === event.currentTarget && closeFormModal()}
-		>
+		<div class="modal-backdrop" role="presentation">
 			<div class="modal-card card" role="dialog" aria-modal="true" aria-labelledby="goal-modal-title">
 				<div class="modal-head">
 					<div>
@@ -666,7 +759,7 @@
 				<form onsubmit={handleGoalSubmit} class="goal-form">
 					{#if !isEditing && (dashboard?.inactive_goals.length ?? 0) > 0}
 						<label class="label">
-							<span>重新启用已停用目标（可选）</span>
+							<span>重新启用已删除目标（可选）</span>
 							<select class="input" value={goalForm.reactivateId} onchange={(event) => handleReactivateChange((event.currentTarget as HTMLSelectElement).value)}>
 								<option value="">新增全新目标</option>
 								{#each dashboard?.inactive_goals ?? [] as inactiveGoal (inactiveGoal.id)}
@@ -682,32 +775,24 @@
 					</label>
 
 					<label class="label">
-						<span>目标类型</span>
-						<select class="input" bind:value={goalForm.goalType} disabled={isEditing || (!!goalForm.reactivateId && !isEditing)}>
-							<option value="checkbox">坚持型</option>
-							<option value="quantity">数值累计型</option>
-							<option value="frequency">频率型</option>
-						</select>
+						<span>备注说明（可选）</span>
+						<textarea class="input textarea-input" bind:value={goalForm.description} placeholder="例如：只记录晨跑；周末补记也可以" disabled={!!goalForm.reactivateId && !isEditing}></textarea>
 					</label>
 
-					{#if goalForm.goalType === 'quantity'}
-						<label class="label">
-							<span>单位</span>
-							<input class="input" type="text" bind:value={goalForm.unit} placeholder="km / 本 / 页" required disabled={!!goalForm.reactivateId && !isEditing} />
-						</label>
-					{/if}
+					<label class="label">
+						<span>单位（可选，填写后打卡需输入数量）</span>
+						<input class="input" type="text" bind:value={goalForm.unit} placeholder="km / 本 / 页" disabled={!!goalForm.reactivateId && !isEditing} />
+					</label>
 
 					<label class="label">
 						<span>年度目标（可选）</span>
 						<input class="input" type="number" min="0" step="0.1" bind:value={goalForm.annualTarget} placeholder="例如 500" />
 					</label>
 
-					{#if goalForm.goalType === 'frequency'}
-						<label class="label">
-							<span>每周目标次数</span>
-							<input class="input" type="number" min="1" step="1" bind:value={goalForm.weeklyTarget} placeholder="例如 3" required />
-						</label>
-					{/if}
+					<label class="label">
+						<span>每周目标次数（可选）</span>
+						<input class="input" type="number" min="1" step="1" bind:value={goalForm.weeklyTarget} placeholder="例如 3" />
+					</label>
 
 					<div class="modal-actions">
 						<button type="button" class="btn variant-soft-surface" onclick={closeFormModal}>取消</button>
@@ -717,13 +802,39 @@
 			</div>
 		</div>
 	{/if}
+
+	{#if showDeleteModal && deleteState.goal}
+		<div class="modal-backdrop" role="presentation" onclick={(event) => event.target === event.currentTarget && closeDeleteModal()}>
+			<div class="modal-card card delete-modal" role="dialog" aria-modal="true" aria-labelledby="goal-delete-title">
+				<div class="modal-head">
+					<div>
+						<p class="section-kicker">Delete Goal</p>
+						<h2 id="goal-delete-title">删除目标</h2>
+					</div>
+					<button class="btn btn-quiet" type="button" onclick={closeDeleteModal}>关闭</button>
+				</div>
+				<p class="section-copy">这是软删除，历史记录会保留。未来如果重新启用这个目标，旧记录会再次出现。</p>
+				<p class="delete-goal-name">请输入 <strong>{deleteState.goal.name}</strong> 确认删除。</p>
+				<input class="input" type="text" bind:value={deleteState.nameInput} placeholder="输入目标名称" />
+				{#if deleteState.error}
+					<div class="alert variant-soft-error">
+						<p>{deleteState.error}</p>
+					</div>
+				{/if}
+				<div class="modal-actions">
+					<button type="button" class="btn variant-soft-surface" onclick={closeDeleteModal}>取消</button>
+					<button type="button" class="btn variant-filled-primary" onclick={confirmDeleteGoal} disabled={isMutating}>确认删除</button>
+				</div>
+			</div>
+		</div>
+	{/if}
 </div>
 
 <style>
 	.goals-page {
 		max-width: 1120px;
 		margin: 0 auto;
-		padding: 20px 0 40px;
+		padding: 12px 0 40px;
 		display: grid;
 		gap: 20px;
 	}
@@ -752,11 +863,101 @@
 		box-shadow: var(--shadow-card);
 	}
 
+	.loading-state,
+	.empty-goals {
+		padding: 40px 28px;
+		text-align: center;
+	}
+
+	.goals-hero,
+	.checkin-panel,
+	.create-panel,
+	.history-panel,
+	.detail-panel,
+	.goal-progress-card,
+	.modal-card {
+		background:
+			linear-gradient(180deg, rgba(255, 252, 247, 0.98) 0%, rgba(246, 238, 227, 0.96) 100%),
+			var(--color-panel);
+	}
+
+	.goals-hero,
+	.create-panel,
+	.section-head,
+	.goal-progress-head,
+	.detail-head,
+	.history-head,
+	.modal-head,
+	.modal-actions {
+		display: flex;
+		justify-content: space-between;
+		gap: 16px;
+		align-items: flex-start;
+	}
+
+	.goals-hero,
+	.checkin-panel,
+	.create-panel,
+	.history-panel,
+	.detail-panel,
+	.goal-progress-card {
+		padding: 24px;
+	}
+
+	.goals-hero {
+		background:
+			linear-gradient(135deg, rgba(255, 253, 249, 0.99) 0%, rgba(249, 243, 236, 0.96) 48%, rgba(239, 227, 210, 0.92) 100%),
+			var(--color-panel);
+		min-height: 152px;
+		box-shadow: 0 20px 42px rgba(83, 58, 35, 0.08);
+	}
+
+	.checkin-panel {
+		background:
+			linear-gradient(180deg, rgba(255, 252, 247, 0.99) 0%, rgba(249, 241, 231, 0.96) 100%),
+			var(--color-panel);
+		box-shadow: 0 22px 44px rgba(83, 58, 35, 0.09);
+	}
+
+	.goals-kicker,
+	.section-kicker {
+		margin: 0 0 8px;
+		font-size: 12px;
+		letter-spacing: 0.16em;
+		text-transform: uppercase;
+		color: var(--color-muted);
+	}
+
+	.goals-hero h1,
+	.checkin-panel h2,
+	.detail-panel h2,
+	.create-panel h2,
+	.history-panel h2,
+	.empty-goals h2 {
+		margin: 0;
+		font-family: var(--font-family-display);
+		font-weight: 600;
+	}
+
+	.goals-hero h1 {
+		font-size: 42px;
+		letter-spacing: -0.03em;
+	}
+
+	.goals-copy,
+	.section-copy,
+	.goal-description {
+		margin: 12px 0 0;
+		line-height: 1.72;
+		color: var(--color-ink-soft);
+	}
+
 	.hero-actions {
 		display: flex;
 		flex-direction: column;
 		align-items: flex-end;
 		gap: 12px;
+		justify-content: flex-end;
 	}
 
 	.hero-date-chip,
@@ -769,11 +970,15 @@
 		border-radius: 999px;
 		background: rgba(255, 248, 240, 0.86);
 		color: var(--color-ink-soft);
+		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
 	}
 
 	.hero-date-chip span,
-	.checkin-summary-chip span {
-		font-size: 0.88rem;
+	.checkin-summary-chip span,
+	.overview-stat span,
+	.overview-stat p,
+	.period-detail-item small,
+	.period-day-head span {
 		color: var(--color-muted);
 	}
 
@@ -784,56 +989,129 @@
 		color: var(--color-ink);
 	}
 
-	.loading-state,
-	.empty-goals {
-		padding: 40px 28px;
-		text-align: center;
+	.date-stepper,
+	.goal-card-actions,
+	.checkin-quantity,
+	.calendar-nav {
+		display: flex;
+		gap: 10px;
+		align-items: center;
+		flex-wrap: wrap;
 	}
 
-	.goals-hero {
+	.section-head {
+		gap: 20px;
+		padding-bottom: 18px;
+		border-bottom: 1px solid rgba(113, 91, 70, 0.08);
+	}
+
+	.checkin-list,
+	.period-detail-list {
+		display: grid;
+		gap: 14px;
+		margin-top: 18px;
+	}
+
+	.checkin-list {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+
+	.checkin-actions {
+		margin-top: 22px;
+		display: flex;
+		justify-content: flex-end;
+		padding-top: 18px;
+		border-top: 1px solid rgba(113, 91, 70, 0.08);
+	}
+
+	.checkin-row,
+	.period-detail-item {
 		display: flex;
 		justify-content: space-between;
-		gap: 24px;
-		align-items: flex-start;
-		padding: 28px;
+		gap: 16px;
+		align-items: center;
 	}
 
-	.goals-kicker,
-	.section-kicker,
-	.goal-type-label {
-		margin: 0 0 8px;
-		font-size: 12px;
-		letter-spacing: 0.16em;
-		text-transform: uppercase;
-		color: var(--color-muted);
+	.checkin-row {
+		padding: 18px;
+		border: 1px solid rgba(113, 91, 70, 0.12);
+		border-radius: 20px;
+		background: rgba(255, 252, 247, 0.82);
+		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
 	}
 
-	.goals-hero h1,
-	.goals-controls h2,
-	.range-toolbar h2,
-	.calendar-panel h2,
-	.calendar-detail h2,
-	.empty-goals h2 {
+	.checkin-goal-name {
 		margin: 0;
-		font-family: var(--font-family-display);
+		font-size: 1.08rem;
 		font-weight: 600;
 	}
 
-	.goals-hero h1 {
-		font-size: 42px;
+	.goal-description {
+		font-size: 0.93rem;
 	}
 
-	.goals-copy,
-	.section-copy {
-		margin: 12px 0 0;
-		max-width: 42rem;
-		line-height: 1.8;
+	.checkin-tags,
+	.goal-card-footer {
+		display: flex;
+		gap: 8px;
+		margin-top: 8px;
+		flex-wrap: wrap;
+	}
+
+	.goal-inline-pill {
+		display: inline-flex;
+		align-items: center;
+		padding: 6px 10px;
+		border-radius: 999px;
+		background: rgba(140, 90, 60, 0.09);
 		color: var(--color-ink-soft);
+		font-size: 0.82rem;
+	}
+
+	.subtle-pill {
+		background: rgba(95, 76, 58, 0.07);
+	}
+
+	.quantity-input {
+		width: 9rem;
+		text-align: right;
+		font-weight: 600;
+	}
+
+	.checkin-toggle {
+		display: inline-flex;
+		align-items: center;
+		gap: 14px;
+		padding: 12px 16px;
+		border-radius: 18px;
+		border: 1px solid var(--color-border);
+		background: rgba(251, 246, 238, 0.92);
+		cursor: pointer;
+		transition: background 0.2s ease, transform 0.2s ease;
+	}
+
+	.checkin-toggle:hover:not(:disabled) {
+		transform: translateY(-1px);
+	}
+
+	.checkin-done,
+	.goal-card-strong {
+		border-color: rgba(140, 90, 60, 0.3);
+		box-shadow: 0 16px 28px rgba(83, 58, 35, 0.08);
+	}
+
+	.checkin-row:focus-within {
+		border-color: rgba(140, 90, 60, 0.28);
+		box-shadow: 0 16px 28px rgba(83, 58, 35, 0.08);
+	}
+
+	.checkin-done {
+		background: linear-gradient(180deg, rgba(242, 229, 213, 0.92) 0%, rgba(235, 220, 201, 0.9) 100%);
 	}
 
 	.overview-strip {
 		display: grid;
-		grid-template-columns: repeat(4, minmax(0, 1fr));
+		grid-template-columns: repeat(3, minmax(0, 1fr));
 		gap: 16px;
 	}
 
@@ -842,12 +1120,12 @@
 		display: grid;
 		gap: 8px;
 		background: linear-gradient(180deg, rgba(255, 252, 247, 0.98) 0%, rgba(247, 241, 232, 0.86) 100%);
+		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
 	}
 
 	.overview-stat p,
 	.overview-stat span {
 		margin: 0;
-		color: var(--color-muted);
 	}
 
 	.overview-stat strong {
@@ -856,58 +1134,31 @@
 		letter-spacing: -0.03em;
 	}
 
-	.goal-progress-grid {
+	.stats-panel,
+	.goal-progress-grid,
+	.detail-grid,
+	.history-stats {
 		display: grid;
-		grid-template-columns: repeat(2, minmax(0, 1fr));
 		gap: 18px;
 	}
 
-	.goal-progress-card,
-	.goals-controls,
-	.checkin-list,
-	.range-toolbar,
-	.calendar-panel,
-	.calendar-detail {
-		padding: 24px;
+	.goal-progress-grid,
+	.detail-grid {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
 	}
 
 	.goal-progress-card {
-		background:
-			linear-gradient(180deg, rgba(255, 252, 247, 0.98) 0%, rgba(246, 238, 227, 0.96) 100%),
-			var(--color-panel);
+		padding: 22px;
+		transition: transform 0.2s ease, box-shadow 0.2s ease;
 	}
 
-	.goal-card-strong {
-		border-color: rgba(140, 90, 60, 0.24);
-		box-shadow: 0 16px 28px rgba(83, 58, 35, 0.08);
+	.goal-progress-card:hover {
+		transform: translateY(-1px);
 	}
 
-	.goal-progress-head,
-	.goals-controls,
-	.range-toolbar,
-	.calendar-head,
-	.modal-head,
-	.modal-actions {
-		display: flex;
-		justify-content: space-between;
-		gap: 16px;
-		align-items: flex-start;
-	}
-
-	.goal-progress-head h2 {
+	.goal-progress-head h2,
+	.period-day-head strong {
 		margin: 0;
-		font-size: 1.3rem;
-	}
-
-	.goal-card-actions,
-	.checkin-switches,
-	.range-tabs,
-	.calendar-nav,
-	.checkin-quantity {
-		display: flex;
-		gap: 10px;
-		align-items: center;
-		flex-wrap: wrap;
 	}
 
 	.goal-progress-bar {
@@ -935,205 +1186,28 @@
 		color: var(--color-ink-soft);
 	}
 
-	.goal-range-note,
-	.checkin-goal-meta,
-	.calendar-detail-summary,
-	.calendar-detail-item p {
-		margin: 10px 0 0;
-		font-size: 0.92rem;
-		color: var(--color-muted);
-	}
-
-	.checkin-list {
+	.period-day-block {
 		display: grid;
-		gap: 14px;
-		background:
-			linear-gradient(180deg, rgba(255, 252, 247, 0.96) 0%, rgba(251, 248, 243, 0.96) 100%),
-			var(--color-panel);
+		gap: 10px;
+		padding: 16px 18px;
+		border: 1px solid rgba(113, 91, 70, 0.11);
+		border-radius: 18px;
+		background: rgba(255, 252, 247, 0.78);
+		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
 	}
 
-	.goal-card-footer {
+	.period-day-head {
 		display: flex;
 		justify-content: space-between;
 		gap: 12px;
 		align-items: center;
-		margin-top: 12px;
-		flex-wrap: wrap;
 	}
 
-	.goal-inline-pill {
-		display: inline-flex;
+	.create-panel {
 		align-items: center;
-		padding: 6px 10px;
-		border-radius: 999px;
-		background: rgba(140, 90, 60, 0.09);
-		color: var(--color-ink-soft);
-		font-size: 0.82rem;
-	}
-
-	.subtle-pill {
-		background: rgba(95, 76, 58, 0.07);
-	}
-
-	.checkin-row,
-	.calendar-detail-item {
-		display: flex;
-		justify-content: space-between;
-		gap: 16px;
-		align-items: center;
-		padding: 16px 0;
-		border-top: 1px solid var(--color-border);
-	}
-
-	.checkin-row:first-child,
-	.calendar-detail-item:first-child {
-		padding-top: 0;
-		border-top: none;
-	}
-
-	.checkin-goal-name {
-		margin: 0;
-		font-size: 1.02rem;
-		font-weight: 600;
-	}
-
-	.checkin-tags {
-		display: flex;
-		gap: 8px;
-		margin-top: 8px;
-		flex-wrap: wrap;
-	}
-
-	.checkin-toggle {
-		display: inline-flex;
-		align-items: center;
-		gap: 14px;
-		padding: 12px 16px;
-		border-radius: 18px;
-		border: 1px solid var(--color-border);
-		background: var(--color-panel-muted);
-		cursor: pointer;
-		transition: background 0.2s ease, transform 0.2s ease;
-	}
-
-	.checkin-toggle:hover:not(:disabled),
-	.calendar-day:hover {
-		transform: translateY(-1px);
-	}
-
-	.checkin-toggle strong {
-		font-size: 1.1rem;
-	}
-
-	.checkin-done {
-		background: rgba(140, 90, 60, 0.14);
-		border-color: rgba(140, 90, 60, 0.3);
-	}
-
-	.quantity-input {
-		width: 9rem;
-	}
-
-	.active-chip,
-	.active-range {
-		background: #ebdfcf;
-		border-color: rgba(140, 90, 60, 0.3);
-		color: var(--color-ink);
-	}
-
-	.calendar-layout {
-		display: grid;
-		grid-template-columns: minmax(0, 1.3fr) minmax(320px, 0.7fr);
-		gap: 20px;
-	}
-
-	.calendar-weekdays,
-	.calendar-grid {
-		display: grid;
-		grid-template-columns: repeat(7, minmax(0, 1fr));
-		gap: 10px;
-	}
-
-	.calendar-blank {
-		min-height: 86px;
-	}
-
-	.calendar-weekdays {
-		margin-top: 18px;
-		color: var(--color-muted);
-		font-size: 0.86rem;
-	}
-
-	.calendar-day {
-		display: grid;
-		gap: 8px;
-		align-content: space-between;
-		min-height: 86px;
-		padding: 12px;
-		border-radius: 18px;
-		border: 1px solid var(--color-border);
-		background: #fbf8f3;
-		cursor: pointer;
-		text-align: left;
-		transition: transform 0.2s ease, border-color 0.2s ease, background 0.2s ease;
-	}
-
-	.calendar-day-number {
-		font-size: 1rem;
-		font-weight: 700;
-	}
-
-	.calendar-day small {
-		color: var(--color-muted);
-	}
-
-	.calendar-day-active {
-		border-color: rgba(140, 90, 60, 0.42);
-		box-shadow: inset 0 0 0 1px rgba(140, 90, 60, 0.22);
-	}
-
-	.level-0 { background: #fbf8f3; }
-	.level-1 { background: #f2e7da; }
-	.level-2 { background: #e8d4bb; }
-	.level-3 { background: #ddb58f; }
-	.level-4 { background: #cb8d59; color: white; }
-
-	.calendar-legend {
-		display: flex;
-		gap: 16px;
-		margin-top: 16px;
-		color: var(--color-muted);
-		font-size: 0.85rem;
-		flex-wrap: wrap;
-	}
-
-	.calendar-legend span {
-		display: inline-flex;
-		align-items: center;
-		gap: 8px;
-	}
-
-	.legend-swatch {
-		display: inline-block;
-		width: 14px;
-		height: 14px;
-		border-radius: 4px;
-		border: 1px solid var(--color-border);
-	}
-
-	.calendar-detail-list {
-		margin-top: 18px;
-	}
-
-	.calendar-detail-hint {
-		margin: 10px 0 0;
-		font-size: 0.9rem;
-		line-height: 1.7;
-		color: var(--color-muted);
-	}
-
-	.detail-done strong {
-		color: var(--color-ink);
+		background:
+			linear-gradient(180deg, rgba(255, 252, 247, 0.98) 0%, rgba(247, 241, 232, 0.9) 100%),
+			var(--color-panel);
 	}
 
 	.modal-backdrop {
@@ -1152,9 +1226,6 @@
 		padding: 24px;
 		overflow-y: auto;
 		overscroll-behavior: contain;
-		background:
-			linear-gradient(180deg, rgba(255, 252, 247, 0.99) 0%, rgba(247, 240, 231, 0.98) 100%),
-			var(--color-panel);
 	}
 
 	.goal-form {
@@ -1163,54 +1234,84 @@
 		margin-top: 18px;
 	}
 
-	.goal-form :global(select:disabled),
-	.goal-form :global(input:disabled) {
-		opacity: 0.72;
-		cursor: not-allowed;
+	.textarea-input {
+		min-height: 96px;
+		resize: vertical;
+	}
+
+	.delete-goal-name {
+		margin: 16px 0 10px;
+		color: var(--color-ink-soft);
 	}
 
 	@media (max-width: 960px) {
 		.overview-strip,
 		.goal-progress-grid,
-		.calendar-layout {
+		.checkin-list,
+		.detail-grid {
 			grid-template-columns: 1fr;
 		}
 
 		.hero-actions {
 			align-items: flex-start;
 		}
+
+		.goals-hero {
+			min-height: auto;
+		}
 	}
 
 	@media (max-width: 720px) {
+		.goals-page {
+			padding-top: 8px;
+			gap: 14px;
+		}
+
 		.goals-hero,
-		.goals-controls,
-		.range-toolbar,
-		.calendar-head,
+		.section-head,
+		.create-panel,
+		.goal-progress-head,
+		.goal-progress-meta,
 		.modal-head,
 		.modal-actions,
-		.checkin-row {
+		.history-head,
+		.checkin-row,
+		.period-day-head {
 			flex-direction: column;
 			align-items: stretch;
 		}
 
-		.calendar-grid,
-		.calendar-weekdays {
-			gap: 8px;
+		.goal-card-footer,
+		.checkin-quantity,
+		.date-stepper,
+		.calendar-nav {
+			align-items: stretch;
 		}
 
-		.goal-progress-meta,
-		.goal-card-footer {
-			flex-direction: column;
-			align-items: flex-start;
+		.checkin-actions {
+			justify-content: stretch;
 		}
 
-		.calendar-day {
-			min-height: 72px;
-			padding: 10px;
+		.goals-hero,
+		.checkin-panel,
+		.create-panel,
+		.history-panel,
+		.detail-panel,
+		.goal-progress-card {
+			padding: 18px;
 		}
 
-		.calendar-blank {
-			min-height: 72px;
+		.goals-hero h1 {
+			font-size: 34px;
+		}
+
+		.checkin-row {
+			padding: 16px;
+		}
+
+		.quantity-input {
+			width: 100%;
+			text-align: left;
 		}
 	}
 </style>

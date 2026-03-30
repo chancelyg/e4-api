@@ -30,7 +30,7 @@
 
 			<nav class="sidebar-nav">
 				<a href="/diary" class:sidebar-link-active={isDiarySection} class="sidebar-link">日记</a>
-				<a href="/goals" class:sidebar-link-active={isGoalsSection} class="sidebar-link sidebar-link-secondary">目标打卡</a>
+				<a href="/goals" class:sidebar-link-active={isGoalsSection} class="sidebar-link sidebar-link-secondary">目标</a>
 			</nav>
 
 			<div class="sidebar-footer">
@@ -55,27 +55,30 @@
 <style>
 	.app-shell {
 		display: grid;
-		grid-template-columns: 18rem minmax(0, 1fr);
+		grid-template-columns: 15rem minmax(0, 1fr);
 		min-height: 100vh;
 		max-width: 1440px;
 		margin: 0 auto;
-		padding: 24px;
-		gap: 24px;
+		padding: 20px;
+		gap: 20px;
 	}
 
 	.app-sidebar {
 		display: flex;
 		flex-direction: column;
 		justify-content: space-between;
-		gap: 24px;
-		padding: 24px;
-		border: 1px solid var(--color-border);
+		gap: 20px;
+		padding: 20px;
+		border: 1px solid rgba(113, 91, 70, 0.16);
 		border-radius: 28px;
-		background: var(--color-panel);
+		background:
+			linear-gradient(180deg, rgba(255, 253, 249, 0.98) 0%, rgba(247, 241, 232, 0.94) 68%, rgba(243, 233, 220, 0.92) 100%),
+			var(--color-panel);
 		box-shadow: var(--shadow-soft);
 		position: sticky;
-		top: 24px;
-		height: calc(100vh - 48px);
+		top: 20px;
+		height: calc(100vh - 40px);
+		backdrop-filter: blur(10px);
 	}
 
 	.sidebar-brand {
@@ -95,7 +98,7 @@
 	.sidebar-brand h1 {
 		margin: 0;
 		font-family: var(--font-family-display);
-		font-size: 32px;
+		font-size: 28px;
 		font-weight: 600;
 		line-height: 1.1;
 	}
@@ -109,21 +112,22 @@
 
 	.sidebar-nav {
 		display: grid;
-		gap: 12px;
+		gap: 10px;
 	}
 
 	.sidebar-link {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		padding: 14px 16px;
-		border: 1px solid var(--color-border);
+		padding: 13px 15px;
+		border: 1px solid rgba(113, 91, 70, 0.14);
 		border-radius: 16px;
-		background: var(--color-panel-muted);
+		background: rgba(255, 251, 246, 0.86);
 		text-decoration: none;
 		font-size: 15px;
 		font-weight: 600;
 		transition: border-color 0.2s ease, background 0.2s ease, transform 0.2s ease;
+		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55);
 	}
 
 	.sidebar-link::after {
@@ -161,7 +165,7 @@
 		align-items: flex-end;
 		justify-content: space-between;
 		gap: 16px;
-		padding-top: 18px;
+		padding-top: 16px;
 		border-top: 1px solid var(--color-border);
 	}
 
@@ -185,6 +189,8 @@
 
 	.app-content {
 		min-width: 0;
+		padding-top: 4px;
+		padding-bottom: 32px;
 	}
 
 	.app-content-wide {
@@ -209,11 +215,68 @@
 		.app-sidebar {
 			position: static;
 			height: auto;
-			padding: 20px;
+			padding: 16px 16px 14px;
+			gap: 14px;
+			border-radius: 22px;
+		}
+
+		.sidebar-brand h1 {
+			font-size: 24px;
+		}
+
+		.sidebar-meta {
+			margin-top: 8px;
+			font-size: 13px;
+			line-height: 1.6;
+		}
+
+		.sidebar-nav {
+			display: grid;
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+			gap: 10px;
+		}
+
+		.sidebar-link {
+			padding: 12px 14px;
+			font-size: 14px;
+			border-radius: 14px;
 		}
 
 		.sidebar-footer {
 			align-items: center;
+			padding-top: 12px;
+		}
+	}
+
+	@media (max-width: 640px) {
+		.app-shell {
+			padding: 12px;
+		}
+
+		.app-sidebar {
+			padding: 14px;
+			border-radius: 20px;
+		}
+
+		.sidebar-brand {
+			display: grid;
+			gap: 4px;
+		}
+
+		.sidebar-brand h1 {
+			font-size: 22px;
+		}
+
+		.sidebar-kicker {
+			margin-bottom: 4px;
+		}
+
+		.sidebar-meta {
+			display: none;
+		}
+
+		.sidebar-footer {
+			padding-top: 10px;
 		}
 	}
 </style>

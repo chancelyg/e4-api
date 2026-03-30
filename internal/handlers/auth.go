@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"net/http"
 	"sync"
 	"time"
@@ -67,6 +68,10 @@ func NewAuthHandler(am *middleware.AuthMiddleware) *AuthHandler {
 
 func getClientIP(c echo.Context) string {
 	return c.RealIP()
+}
+
+func getRequestID(c echo.Context) string {
+	return c.Response().Header().Get(echo.HeaderXRequestID)
 }
 
 func checkRateLimit(clientIP string) (bool, string) {
@@ -193,9 +198,11 @@ func consumePreAuthChallenge(token string) (string, bool) {
 
 func (h *AuthHandler) LoginStep1(c echo.Context) error {
 	clientIP := getClientIP(c)
+	requestID := getRequestID(c)
 
 	allowed, msg := checkRateLimit(clientIP)
 	if !allowed {
+		log.Printf("auth login step1 rate limited request_id=%s ip=%s username=%q", requestID, clientIP, c.FormValue("username"))
 		return c.JSON(http.StatusTooManyRequests, map[string]string{
 			"error": msg,
 		})
@@ -203,12 +210,14 @@ func (h *AuthHandler) LoginStep1(c echo.Context) error {
 
 	req := new(LoginStep1Request)
 	if err := c.Bind(req); err != nil {
+		log.Printf("auth login step1 bind failed request_id=%s ip=%s error=%v", requestID, clientIP, err)
 		return c.JSON(http.StatusBadRequest, map[string]string{
 			"error": "无效的请求数据",
 		})
 	}
 
 	if req.Username != config.Cfg.Auth.Username {
+		log.Printf("auth login step1 rejected invalid username request_id=%s ip=%s username=%q", requestID, clientIP, req.Username)
 		return c.JSON(http.StatusUnauthorized, map[string]string{
 			"error": "用户名或密码错误",
 		})
@@ -218,6 +227,7 @@ func (h *AuthHandler) LoginStep1(c echo.Context) error {
 		[]byte(config.Cfg.Auth.Password),
 		[]byte(req.Password),
 	); err != nil {
+		log.Printf("auth login step1 rejected invalid password request_id=%s ip=%s username=%q error=%v", requestID, clientIP, req.Username, err)
 		return c.JSON(http.StatusUnauthorized, map[string]string{
 			"error": "用户名或密码错误",
 		})
@@ -226,10 +236,12 @@ func (h *AuthHandler) LoginStep1(c echo.Context) error {
 	if config.Cfg.Auth.TOTPSecret != "" {
 		challengeToken, err := savePreAuthChallenge(req.Username)
 		if err != nil {
+			log.Printf("auth login step1 challenge creation failed request_id=%s ip=%s username=%q error=%v", requestID, clientIP, req.Username, err)
 			return c.JSON(http.StatusInternalServerError, map[string]string{
 				"error": "创建验证挑战失败",
 			})
 		}
+		log.Printf("auth login step1 accepted request_id=%s ip=%s username=%q needs_2fa=true", requestID, clientIP, req.Username)
 		return c.JSON(http.StatusOK, map[string]interface{}{
 			"needs_2fa":       true,
 			"challenge_token": challengeToken,
@@ -239,6 +251,7 @@ func (h *AuthHandler) LoginStep1(c echo.Context) error {
 	sessionID := h.AuthMiddleware.CreateSession(req.Username)
 	setSessionCookie(c, sessionID, h.AuthMiddleware.SessionMaxAgeSeconds())
 	resetLoginAttempts(clientIP)
+	log.Printf("auth login step1 accepted request_id=%s ip=%s username=%q needs_2fa=false", requestID, clientIP, req.Username)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"success":  true,
@@ -248,9 +261,11 @@ func (h *AuthHandler) LoginStep1(c echo.Context) error {
 
 func (h *AuthHandler) LoginStep2(c echo.Context) error {
 	clientIP := getClientIP(c)
+	requestID := getRequestID(c)
 
 	allowed, msg := checkRateLimit(clientIP)
 	if !allowed {
+		log.Printf("auth login step2 rate limited request_id=%s ip=%s", requestID, clientIP)
 		return c.JSON(http.StatusTooManyRequests, map[string]string{
 			"error": msg,
 		})
@@ -261,6 +276,7 @@ func (h *AuthHandler) LoginStep2(c echo.Context) error {
 	if code == "" {
 		req := new(LoginStep2Request)
 		if err := c.Bind(req); err != nil {
+			log.Printf("auth login step2 bind failed request_id=%s ip=%s error=%v", requestID, clientIP, err)
 			return c.JSON(http.StatusBadRequest, map[string]string{
 				"error": "无效的请求数据",
 			})
@@ -270,6 +286,7 @@ func (h *AuthHandler) LoginStep2(c echo.Context) error {
 	}
 
 	if config.Cfg.Auth.TOTPSecret == "" {
+		log.Printf("auth login step2 rejected no totp configured request_id=%s ip=%s", requestID, clientIP)
 		return c.JSON(http.StatusBadRequest, map[string]string{
 			"error": "未配置二步验证",
 		})
@@ -277,12 +294,14 @@ func (h *AuthHandler) LoginStep2(c echo.Context) error {
 
 	username, ok := consumePreAuthChallenge(challengeToken)
 	if !ok {
+		log.Printf("auth login step2 rejected invalid challenge request_id=%s ip=%s challenge_len=%d", requestID, clientIP, len(challengeToken))
 		return c.JSON(http.StatusUnauthorized, map[string]string{
 			"error": "二步验证会话无效或已过期",
 		})
 	}
 
 	if valid := totp.Validate(code, config.Cfg.Auth.TOTPSecret); !valid {
+		log.Printf("auth login step2 rejected invalid code request_id=%s ip=%s username=%q code_len=%d", requestID, clientIP, username, len(code))
 		return c.JSON(http.StatusUnauthorized, map[string]string{
 			"error": "验证码错误",
 		})
@@ -291,6 +310,7 @@ func (h *AuthHandler) LoginStep2(c echo.Context) error {
 	sessionID := h.AuthMiddleware.CreateSession(username)
 	setSessionCookie(c, sessionID, h.AuthMiddleware.SessionMaxAgeSeconds())
 	resetLoginAttempts(clientIP)
+	log.Printf("auth login step2 accepted request_id=%s ip=%s username=%q", requestID, clientIP, username)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"success":  true,
@@ -313,9 +333,11 @@ func setSessionCookie(c echo.Context, sessionID string, maxAge int) {
 
 func (h *AuthHandler) Login(c echo.Context) error {
 	clientIP := getClientIP(c)
+	requestID := getRequestID(c)
 
 	allowed, msg := checkRateLimit(clientIP)
 	if !allowed {
+		log.Printf("auth login rate limited request_id=%s ip=%s username=%q", requestID, clientIP, c.FormValue("username"))
 		return c.JSON(http.StatusTooManyRequests, map[string]string{
 			"error": msg,
 		})
@@ -323,12 +345,14 @@ func (h *AuthHandler) Login(c echo.Context) error {
 
 	req := new(LoginRequest)
 	if err := c.Bind(req); err != nil {
+		log.Printf("auth login bind failed request_id=%s ip=%s error=%v", requestID, clientIP, err)
 		return c.JSON(http.StatusBadRequest, map[string]string{
 			"error": "无效的请求数据",
 		})
 	}
 
 	if req.Username != config.Cfg.Auth.Username {
+		log.Printf("auth login rejected invalid username request_id=%s ip=%s username=%q", requestID, clientIP, req.Username)
 		return c.JSON(http.StatusUnauthorized, map[string]string{
 			"error": "用户名或密码错误",
 		})
@@ -338,6 +362,7 @@ func (h *AuthHandler) Login(c echo.Context) error {
 		[]byte(config.Cfg.Auth.Password),
 		[]byte(req.Password),
 	); err != nil {
+		log.Printf("auth login rejected invalid password request_id=%s ip=%s username=%q error=%v", requestID, clientIP, req.Username, err)
 		return c.JSON(http.StatusUnauthorized, map[string]string{
 			"error": "用户名或密码错误",
 		})
@@ -346,10 +371,12 @@ func (h *AuthHandler) Login(c echo.Context) error {
 	if config.Cfg.Auth.TOTPSecret != "" {
 		challengeToken, err := savePreAuthChallenge(req.Username)
 		if err != nil {
+			log.Printf("auth login challenge creation failed request_id=%s ip=%s username=%q error=%v", requestID, clientIP, req.Username, err)
 			return c.JSON(http.StatusInternalServerError, map[string]string{
 				"error": "创建验证挑战失败",
 			})
 		}
+		log.Printf("auth login accepted request_id=%s ip=%s username=%q needs_2fa=true", requestID, clientIP, req.Username)
 		return c.JSON(http.StatusOK, map[string]interface{}{
 			"needs_2fa":       true,
 			"challenge_token": challengeToken,
@@ -359,6 +386,7 @@ func (h *AuthHandler) Login(c echo.Context) error {
 	sessionID := h.AuthMiddleware.CreateSession(req.Username)
 	setSessionCookie(c, sessionID, h.AuthMiddleware.SessionMaxAgeSeconds())
 	resetLoginAttempts(clientIP)
+	log.Printf("auth login accepted request_id=%s ip=%s username=%q needs_2fa=false", requestID, clientIP, req.Username)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"success":  true,
@@ -367,6 +395,7 @@ func (h *AuthHandler) Login(c echo.Context) error {
 }
 
 func (h *AuthHandler) Logout(c echo.Context) error {
+	requestID := getRequestID(c)
 	sessionID, ok := c.Get("session_id").(string)
 	if (!ok || sessionID == "") && c != nil {
 		if cookie, err := c.Cookie(middleware.SessionCookieName); err == nil {
@@ -375,6 +404,9 @@ func (h *AuthHandler) Logout(c echo.Context) error {
 	}
 	if sessionID != "" {
 		h.AuthMiddleware.DestroySession(sessionID)
+		log.Printf("auth logout request_id=%s session_present=true", requestID)
+	} else {
+		log.Printf("auth logout request_id=%s session_present=false", requestID)
 	}
 
 	cookie := new(http.Cookie)
@@ -393,8 +425,10 @@ func (h *AuthHandler) Logout(c echo.Context) error {
 }
 
 func (h *AuthHandler) Status(c echo.Context) error {
+	requestID := getRequestID(c)
 	cookie, err := c.Cookie(middleware.SessionCookieName)
 	if err != nil || cookie.Value == "" {
+		log.Printf("auth status anonymous request_id=%s", requestID)
 		return c.JSON(http.StatusOK, map[string]interface{}{
 			"is_logged_in": false,
 		})
@@ -402,10 +436,12 @@ func (h *AuthHandler) Status(c echo.Context) error {
 
 	session := h.AuthMiddleware.GetSession(cookie.Value)
 	if session == nil || !session.IsLoggedIn {
+		log.Printf("auth status invalid session request_id=%s", requestID)
 		return c.JSON(http.StatusOK, map[string]interface{}{
 			"is_logged_in": false,
 		})
 	}
+	log.Printf("auth status logged in request_id=%s username=%q", requestID, session.Username)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"is_logged_in": true,

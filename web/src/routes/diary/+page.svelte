@@ -113,7 +113,7 @@
 			<div>
 				<p class="overview-kicker">Diary Archive</p>
 				<h1>日记</h1>
-				<p class="overview-text">按关键词、模糊片段与月份回看过去的记录，让信息先于装饰呈现。</p>
+				<p class="overview-text">按关键词和月份回看过去的记录，让长文本也能保持安静、顺手、可检索。</p>
 			</div>
 			<div class="overview-stats">
 				<div>
@@ -163,7 +163,7 @@
 						<div class="month-filter-head month-filter-head-compact">
 							<div>
 								<strong>{pickerMonthLabel}</strong>
-								<small>{month ? `当前筛选：${formatMonthLabel(month)}` : '选择年份和月份后点击检索'}</small>
+								<small>{month ? `当前筛选：${formatMonthLabel(month)}` : '选择一个月份快速回看'}</small>
 							</div>
 						</div>
 
@@ -207,6 +207,17 @@
 		{/if}
 
 		<section class="list-card card">
+			<div class="list-card-head">
+				<div>
+					<p class="list-kicker">Entries</p>
+					<h2>{search || month ? '筛选结果' : '最近记录'}</h2>
+				</div>
+				<div class="list-card-meta">
+					<span>共 {total} 篇</span>
+					<span>本页 {diaries.length} 篇</span>
+				</div>
+			</div>
+
 			{#if diaries.length === 0}
 				<div class="empty-state">
 					<p>{search || month ? '没有符合条件的日记。' : '还没有日记。'}</p>
@@ -224,7 +235,10 @@
 							</div>
 							<div class="diary-row-body">
 								<p class="diary-content">{diary.content}</p>
-								<a class="diary-edit-link" href={`/diary/${diary.id}`}>编辑</a>
+								<div class="diary-row-foot">
+									<span class="diary-length">约 {diary.content.length} 字</span>
+									<a class="diary-edit-link" href={`/diary/${diary.id}`}>编辑</a>
+								</div>
 							</div>
 						</article>
 					{/each}
@@ -264,7 +278,9 @@
 	.diary-page {
 		max-width: 1080px;
 		margin: 0 auto;
-		padding: 20px 0 40px;
+		padding: 12px 0 40px;
+		display: grid;
+		gap: 18px;
 	}
 
 	.loading-container {
@@ -277,7 +293,11 @@
 		display: flex;
 		justify-content: space-between;
 		gap: 24px;
-		padding: 28px;
+		padding: 30px;
+		background:
+			linear-gradient(135deg, rgba(255, 253, 249, 0.99) 0%, rgba(249, 243, 236, 0.96) 50%, rgba(240, 227, 209, 0.92) 100%),
+			var(--color-panel);
+		box-shadow: 0 20px 40px rgba(53, 39, 27, 0.08);
 	}
 
 	.overview-kicker {
@@ -299,7 +319,7 @@
 		max-width: 38rem;
 		margin: 12px 0 0;
 		color: var(--color-ink-soft);
-		line-height: 1.9;
+		line-height: 1.8;
 	}
 
 	.overview-stats {
@@ -309,10 +329,11 @@
 	}
 
 	.overview-stats div {
-		padding: 16px 18px;
-		border: 1px solid var(--color-border);
+		padding: 18px 18px;
+		border: 1px solid rgba(113, 91, 70, 0.13);
 		border-radius: 18px;
-		background: var(--color-panel-muted);
+		background: rgba(255, 250, 244, 0.9);
+		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
 	}
 
 	.overview-stats span,
@@ -334,20 +355,25 @@
 	.summary-grid {
 		display: grid;
 		grid-template-columns: repeat(4, minmax(0, 1fr));
-		gap: 14px;
-		margin-top: 16px;
+		gap: 16px;
 	}
 
 	.summary-item {
 		padding: 20px;
+		background: linear-gradient(180deg, rgba(255, 252, 247, 0.98) 0%, rgba(247, 241, 232, 0.9) 100%);
 	}
 
 	.filter-card {
 		display: flex;
 		justify-content: space-between;
-		gap: 18px;
-		padding: 20px;
-		margin-top: 16px;
+		gap: 20px;
+		padding: 22px;
+		position: sticky;
+		top: 16px;
+		z-index: 1;
+		backdrop-filter: blur(10px);
+		background: rgba(255, 251, 246, 0.92);
+		box-shadow: 0 16px 34px rgba(53, 39, 27, 0.07);
 	}
 
 	.filter-fields {
@@ -369,7 +395,7 @@
 
 	.month-filter-shell {
 		display: grid;
-		gap: 14px;
+		gap: 12px;
 		padding: 14px;
 		border: 1px solid var(--color-border);
 		border-radius: 18px;
@@ -447,35 +473,91 @@
 		display: flex;
 		justify-content: space-between;
 		gap: 12px;
-		margin-top: 12px;
-		padding: 0 6px;
+		padding: 0 8px;
 		font-size: 14px;
 		color: var(--color-muted);
 	}
 
+	.list-card-head {
+		display: flex;
+		justify-content: space-between;
+		align-items: flex-start;
+		gap: 16px;
+		padding: 24px 28px 18px;
+		border-bottom: 1px solid rgba(113, 91, 70, 0.08);
+	}
+
+	.list-kicker {
+		margin: 0 0 8px;
+		font-size: 12px;
+		letter-spacing: 0.16em;
+		text-transform: uppercase;
+		color: var(--color-muted);
+	}
+
+	.list-card-head h2 {
+		margin: 0;
+		font-family: var(--font-family-display);
+		font-size: 28px;
+		font-weight: 600;
+	}
+
+	.list-card-meta {
+		display: flex;
+		gap: 10px;
+		flex-wrap: wrap;
+		justify-content: flex-end;
+	}
+
+	.list-card-meta span,
+	.diary-length {
+		display: inline-flex;
+		align-items: center;
+		padding: 6px 10px;
+		border-radius: 999px;
+		background: rgba(140, 90, 60, 0.08);
+		color: var(--color-muted);
+		font-size: 13px;
+	}
+
 	.list-card {
-		margin-top: 16px;
 		overflow: hidden;
+		background:
+			linear-gradient(180deg, rgba(255, 253, 249, 0.98) 0%, rgba(247, 242, 235, 0.92) 100%),
+			var(--color-panel);
 	}
 
 	.diary-list {
 		display: grid;
+		gap: 14px;
+		padding: 18px;
 	}
 
 	.diary-row {
 		display: grid;
-		grid-template-columns: 160px minmax(0, 1fr);
+		grid-template-columns: 136px minmax(0, 1fr);
 		gap: 24px;
 		padding: 22px 24px;
-		border-top: 1px solid var(--color-border);
+		border: 1px solid rgba(113, 91, 70, 0.11);
+		border-radius: 22px;
+		background: rgba(255, 252, 247, 0.74);
+		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+		transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
 	}
 
-	.diary-row:first-child {
-		border-top: none;
+	.diary-row:hover {
+		transform: translateY(-1px);
+		border-color: rgba(140, 90, 60, 0.22);
+		box-shadow: 0 14px 28px rgba(53, 39, 27, 0.07);
 	}
 
 	.diary-row-meta {
-		padding-top: 2px;
+		display: grid;
+		align-content: start;
+		gap: 6px;
+		padding: 12px 14px;
+		border-radius: 18px;
+		background: rgba(247, 240, 231, 0.92);
 	}
 
 	.diary-date,
@@ -489,6 +571,7 @@
 		font-size: 14px;
 		font-weight: 600;
 		color: var(--color-ink);
+		letter-spacing: 0.02em;
 	}
 
 	.diary-weekday {
@@ -499,7 +582,7 @@
 
 	.diary-row-body {
 		display: grid;
-		gap: 12px;
+		gap: 16px;
 	}
 
 	.diary-content {
@@ -507,16 +590,35 @@
 		line-height: 1.9;
 		white-space: pre-wrap;
 		word-break: break-word;
+		display: -webkit-box;
+		line-clamp: 4;
+		-webkit-line-clamp: 4;
+		-webkit-box-orient: vertical;
+		overflow: hidden;
+	}
+
+	.diary-row-foot {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 12px;
+		flex-wrap: wrap;
 	}
 
 	.diary-edit-link {
 		width: fit-content;
-		padding-bottom: 2px;
-		border-bottom: 1px solid var(--color-ink-soft);
+		padding: 0.35rem 0.75rem;
+		border: 1px solid rgba(140, 90, 60, 0.16);
+		border-radius: 999px;
+		background: rgba(255, 248, 240, 0.86);
 		text-decoration: none;
 		font-size: 14px;
 		font-weight: 600;
 		color: var(--color-ink);
+	}
+
+	.diary-edit-link:hover {
+		background: rgba(244, 234, 221, 0.96);
 	}
 
 	.empty-state {
@@ -534,8 +636,7 @@
 		align-items: center;
 		justify-content: center;
 		gap: 14px;
-		padding: 20px 24px 24px;
-		border-top: 1px solid var(--color-border);
+		padding: 10px 24px 24px;
 	}
 
 	.pagination span {
@@ -550,6 +651,7 @@
 
 		.filter-card,
 		.overview-card,
+		.list-card-head,
 		.diary-row {
 			grid-template-columns: 1fr;
 			flex-direction: column;
@@ -562,19 +664,34 @@
 		.filter-actions {
 			align-items: stretch;
 		}
+
+		.filter-card {
+			position: static;
+		}
 	}
 
 	@media (max-width: 640px) {
 		.diary-page {
 			padding: 8px 0 28px;
+			gap: 12px;
 		}
 
 		.overview-card,
 		.summary-item,
 		.filter-card,
+		.list-card-head,
 		.diary-row {
 			padding-left: 16px;
 			padding-right: 16px;
+		}
+
+		.overview-card {
+			padding-top: 22px;
+			padding-bottom: 22px;
+		}
+
+		.overview-card h1 {
+			font-size: 34px;
 		}
 
 		.summary-grid {
@@ -582,12 +699,28 @@
 		}
 
 		.active-filters,
+		.list-card-meta,
+		.diary-row-foot,
 		.pagination {
 			flex-direction: column;
+			align-items: stretch;
 		}
 
 		.filter-actions :global(.btn) {
 			width: 100%;
+		}
+
+		.diary-list {
+			padding: 12px;
+		}
+
+		.diary-row-meta {
+			padding: 10px 12px;
+		}
+
+		.diary-content {
+			line-clamp: 5;
+			-webkit-line-clamp: 5;
 		}
 	}
 </style>

@@ -22,7 +22,7 @@ type GoalHandler struct{}
 type CreateGoalRequest struct {
 	ReactivateID uint     `json:"reactivate_id"`
 	Name         string   `json:"name"`
-	GoalType     string   `json:"goal_type"`
+	Description  string   `json:"description"`
 	Unit         string   `json:"unit"`
 	AnnualTarget *float64 `json:"annual_target"`
 	WeeklyTarget *int     `json:"weekly_target"`
@@ -30,6 +30,7 @@ type CreateGoalRequest struct {
 
 type UpdateGoalRequest struct {
 	Name         *string  `json:"name"`
+	Description  *string  `json:"description"`
 	Unit         *string  `json:"unit"`
 	AnnualTarget *float64 `json:"annual_target"`
 	WeeklyTarget *int     `json:"weekly_target"`
@@ -40,21 +41,36 @@ type UpsertGoalRecordRequest struct {
 }
 
 type GoalDashboardResponse struct {
-	AnchorDate     string                  `json:"anchor_date"`
-	Range          string                  `json:"range"`
-	RangeStartDate string                  `json:"range_start_date"`
-	RangeEndDate   string                  `json:"range_end_date"`
-	CheckinDate    string                  `json:"checkin_date"`
-	CalendarMonth  string                  `json:"calendar_month"`
-	Goals          []GoalDashboardItem     `json:"goals"`
-	InactiveGoals  []models.Goal           `json:"inactive_goals"`
-	CalendarDays   []GoalCalendarDay       `json:"calendar_days"`
-	DayDetails     []GoalCalendarDayDetail `json:"day_details"`
+	AnchorDate          string                  `json:"anchor_date"`
+	Range               string                  `json:"range"`
+	RangeStartDate      string                  `json:"range_start_date"`
+	RangeEndDate        string                  `json:"range_end_date"`
+	CheckinDate         string                  `json:"checkin_date"`
+	TodayCompletedCount int                     `json:"today_completed_count"`
+	AnnualCheckinTotal  int                     `json:"annual_checkin_total"`
+	CalendarMonth       string                  `json:"calendar_month"`
+	Goals               []GoalDashboardItem     `json:"goals"`
+	InactiveGoals       []models.Goal           `json:"inactive_goals"`
+	CalendarDays        []GoalCalendarDay       `json:"calendar_days"`
+	DayDetails          []GoalCalendarDayDetail `json:"day_details"`
+	WeekDetails         []GoalPeriodDetail      `json:"week_details"`
+	MonthDetails        []GoalPeriodDetail      `json:"month_details"`
+}
+
+type GoalYearSummaryResponse struct {
+	Year              int    `json:"year"`
+	HasRecords        bool   `json:"has_records"`
+	RecordedGoalCount int    `json:"recorded_goal_count"`
+	TotalCheckins     int    `json:"total_checkins"`
+	RecordedDays      int    `json:"recorded_days"`
+	StartDate         string `json:"start_date"`
+	EndDate           string `json:"end_date"`
 }
 
 type GoalDashboardItem struct {
 	ID                         uint               `json:"id"`
 	Name                       string             `json:"name"`
+	Description                string             `json:"description"`
 	GoalType                   string             `json:"goal_type"`
 	Unit                       string             `json:"unit"`
 	AnnualTarget               *float64           `json:"annual_target"`
@@ -87,6 +103,12 @@ type GoalCalendarDayDetail struct {
 	Date           string                  `json:"date"`
 	CompletedGoals int                     `json:"completed_goals"`
 	TotalGoals     int                     `json:"total_goals"`
+	Items          []GoalCalendarDayRecord `json:"items"`
+}
+
+type GoalPeriodDetail struct {
+	Date           string                  `json:"date"`
+	CompletedGoals int                     `json:"completed_goals"`
 	Items          []GoalCalendarDayRecord `json:"items"`
 }
 
@@ -171,10 +193,31 @@ func (h *GoalHandler) Delete(c echo.Context) error {
 
 	goal.IsActive = false
 	if err := db.DB.Save(goal).Error; err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "停用目标失败"})
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "删除目标失败"})
 	}
 
 	return c.JSON(http.StatusOK, map[string]bool{"success": true})
+}
+
+func (h *GoalHandler) YearSummary(c echo.Context) error {
+	year, err := resolveSummaryYear(c.QueryParam("year"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+	}
+
+	goals, err := listAllGoals()
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "获取年度统计失败"})
+	}
+
+	recordsByGoal, err := loadRecordsByGoal(goals)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "获取年度统计失败"})
+	}
+
+	start, end := yearBounds(year, today().Location())
+	summary := buildYearSummary(year, goals, recordsByGoal, start, end)
+	return c.JSON(http.StatusOK, summary)
 }
 
 func (h *GoalHandler) UpsertRecord(c echo.Context) error {
@@ -273,32 +316,37 @@ func (h *GoalHandler) Dashboard(c echo.Context) error {
 
 	items := buildDashboardItems(goals, recordsByGoal, rangeStart, rangeEnd, anchorDate, checkinDate)
 	calendarDays, dayDetails := buildCalendar(goals, recordsByGoal, monthStart, monthEnd)
+	weekStart, weekEnd := rangeBounds(anchorDate, "week")
+	monthDetails := buildPeriodDetails(goals, recordsByGoal, monthStart, monthEnd)
+	weekDetails := buildPeriodDetails(goals, recordsByGoal, weekStart, weekEnd)
+	todayCompletedCount, annualCheckinTotal := buildDashboardSummaryCounts(goals, recordsByGoal, anchorDate)
 
 	return c.JSON(http.StatusOK, GoalDashboardResponse{
-		AnchorDate:     anchorDate.Format(goalDateLayout),
-		Range:          rangeKey,
-		RangeStartDate: rangeStart.Format(goalDateLayout),
-		RangeEndDate:   rangeEnd.Format(goalDateLayout),
-		CheckinDate:    checkinDate.Format(goalDateLayout),
-		CalendarMonth:  calendarMonth,
-		Goals:          items,
-		InactiveGoals:  inactiveGoals,
-		CalendarDays:   calendarDays,
-		DayDetails:     dayDetails,
+		AnchorDate:          anchorDate.Format(goalDateLayout),
+		Range:               rangeKey,
+		RangeStartDate:      rangeStart.Format(goalDateLayout),
+		RangeEndDate:        rangeEnd.Format(goalDateLayout),
+		CheckinDate:         checkinDate.Format(goalDateLayout),
+		TodayCompletedCount: todayCompletedCount,
+		AnnualCheckinTotal:  annualCheckinTotal,
+		CalendarMonth:       calendarMonth,
+		Goals:               items,
+		InactiveGoals:       inactiveGoals,
+		CalendarDays:        calendarDays,
+		DayDetails:          dayDetails,
+		WeekDetails:         weekDetails,
+		MonthDetails:        monthDetails,
 	})
 }
 
 func buildGoalFromCreate(req CreateGoalRequest) (models.Goal, error) {
 	name := strings.TrimSpace(req.Name)
-	goalType := strings.TrimSpace(req.GoalType)
 	unit := strings.TrimSpace(req.Unit)
-	if req.ReactivateID > 0 && goalType == "" {
-		goalType = models.GoalTypeCheckbox
-	}
 
 	goal := models.Goal{
 		Name:         name,
-		GoalType:     goalType,
+		Description:  strings.TrimSpace(req.Description),
+		GoalType:     models.GoalTypeCheckbox,
 		Unit:         unit,
 		AnnualTarget: normalizePositiveFloat(req.AnnualTarget),
 		WeeklyTarget: normalizePositiveInt(req.WeeklyTarget),
@@ -316,6 +364,9 @@ func buildGoalFromCreate(req CreateGoalRequest) (models.Goal, error) {
 func applyGoalUpdate(goal *models.Goal, req UpdateGoalRequest) error {
 	if req.Name != nil {
 		goal.Name = strings.TrimSpace(*req.Name)
+	}
+	if req.Description != nil {
+		goal.Description = strings.TrimSpace(*req.Description)
 	}
 	if req.Unit != nil {
 		goal.Unit = strings.TrimSpace(*req.Unit)
@@ -335,24 +386,6 @@ func sanitizeAndValidateGoal(goal *models.Goal) error {
 		return errors.New("目标名称不能为空")
 	}
 
-	switch goal.GoalType {
-	case models.GoalTypeCheckbox:
-		goal.Unit = ""
-		goal.WeeklyTarget = nil
-	case models.GoalTypeQuantity:
-		if goal.Unit == "" {
-			return errors.New("数值累计型目标需要填写单位")
-		}
-		goal.WeeklyTarget = nil
-	case models.GoalTypeFrequency:
-		if goal.WeeklyTarget == nil {
-			return errors.New("频率型目标需要填写每周目标次数")
-		}
-		goal.Unit = ""
-	default:
-		return errors.New("无效的目标类型")
-	}
-
 	if goal.AnnualTarget != nil && *goal.AnnualTarget <= 0 {
 		return errors.New("年度目标必须大于 0")
 	}
@@ -370,19 +403,12 @@ func buildGoalRecord(goal *models.Goal, recordDate string, req UpsertGoalRecordR
 		IsCompleted: true,
 	}
 
-	switch goal.GoalType {
-	case models.GoalTypeCheckbox, models.GoalTypeFrequency:
-		if req.Quantity != nil {
-			return models.GoalRecord{}, errors.New("该目标不需要填写数值")
-		}
-	case models.GoalTypeQuantity:
+	if goal.Unit != "" {
 		quantity := normalizePositiveFloat(req.Quantity)
 		if quantity == nil {
-			return models.GoalRecord{}, errors.New("数值累计型目标需要填写大于 0 的数量")
+			return models.GoalRecord{}, errors.New("该目标需要填写大于 0 的数量")
 		}
 		record.Quantity = quantity
-	default:
-		return models.GoalRecord{}, errors.New("无效的目标类型")
 	}
 
 	return record, nil
@@ -414,7 +440,6 @@ func reactivateGoal(id uint, next models.Goal) (*models.Goal, error) {
 	}
 
 	goal.Name = next.Name
-	goal.GoalType = next.GoalType
 	goal.Unit = next.Unit
 	goal.AnnualTarget = next.AnnualTarget
 	goal.WeeklyTarget = next.WeeklyTarget
@@ -466,6 +491,7 @@ func buildDashboardItems(goals []models.Goal, recordsByGoal map[uint][]models.Go
 		item := GoalDashboardItem{
 			ID:           goal.ID,
 			Name:         goal.Name,
+			Description:  goal.Description,
 			GoalType:     goal.GoalType,
 			Unit:         goal.Unit,
 			AnnualTarget: goal.AnnualTarget,
@@ -502,32 +528,21 @@ func buildDashboardItems(goals []models.Goal, recordsByGoal map[uint][]models.Go
 			}
 		}
 
-		switch goal.GoalType {
-		case models.GoalTypeQuantity:
-			if goal.AnnualTarget != nil {
-				remaining := math.Max(*goal.AnnualTarget-item.AnnualQuantityTotal, 0)
-				item.AnnualRemainingValue = floatPtr(roundToOneDecimal(remaining))
-				percent := progressPercent(item.AnnualQuantityTotal, *goal.AnnualTarget)
-				item.AnnualProgressPercent = &percent
-			}
-		case models.GoalTypeFrequency:
-			if goal.WeeklyTarget != nil {
-				percent := progressPercent(float64(item.CurrentWeekCompletedCount), float64(*goal.WeeklyTarget))
-				item.CurrentWeekProgressPercent = &percent
-			}
-			if goal.AnnualTarget != nil {
-				remaining := math.Max(*goal.AnnualTarget-float64(item.AnnualCompletedCount), 0)
-				item.AnnualRemainingValue = floatPtr(roundToOneDecimal(remaining))
-				percent := progressPercent(float64(item.AnnualCompletedCount), *goal.AnnualTarget)
-				item.AnnualProgressPercent = &percent
-			}
-		case models.GoalTypeCheckbox:
-			if goal.AnnualTarget != nil {
-				remaining := math.Max(*goal.AnnualTarget-float64(item.AnnualCompletedCount), 0)
-				item.AnnualRemainingValue = floatPtr(roundToOneDecimal(remaining))
-				percent := progressPercent(float64(item.AnnualCompletedCount), *goal.AnnualTarget)
-				item.AnnualProgressPercent = &percent
-			}
+		if goal.Unit != "" && goal.AnnualTarget != nil {
+			remaining := math.Max(*goal.AnnualTarget-item.AnnualQuantityTotal, 0)
+			item.AnnualRemainingValue = floatPtr(roundToOneDecimal(remaining))
+			percent := progressPercent(item.AnnualQuantityTotal, *goal.AnnualTarget)
+			item.AnnualProgressPercent = &percent
+		} else if goal.AnnualTarget != nil {
+			remaining := math.Max(*goal.AnnualTarget-float64(item.AnnualCompletedCount), 0)
+			item.AnnualRemainingValue = floatPtr(roundToOneDecimal(remaining))
+			percent := progressPercent(float64(item.AnnualCompletedCount), *goal.AnnualTarget)
+			item.AnnualProgressPercent = &percent
+		}
+
+		if goal.WeeklyTarget != nil {
+			percent := progressPercent(float64(item.CurrentWeekCompletedCount), float64(*goal.WeeklyTarget))
+			item.CurrentWeekProgressPercent = &percent
 		}
 
 		item.RangeQuantityTotal = roundToOneDecimal(item.RangeQuantityTotal)
@@ -609,6 +624,115 @@ func buildCalendar(goals []models.Goal, recordsByGoal map[uint][]models.GoalReco
 	return days, details
 }
 
+func buildPeriodDetails(goals []models.Goal, recordsByGoal map[uint][]models.GoalRecord, start, end time.Time) []GoalPeriodDetail {
+	if len(goals) == 0 {
+		return []GoalPeriodDetail{}
+	}
+
+	goalByID := make(map[uint]models.Goal, len(goals))
+	for _, goal := range goals {
+		goalByID[goal.ID] = goal
+	}
+
+	dayItems := make(map[string][]GoalCalendarDayRecord)
+	for goalID, records := range recordsByGoal {
+		goal, exists := goalByID[goalID]
+		if !exists {
+			continue
+		}
+
+		for _, record := range records {
+			recordTime, err := time.Parse(goalDateLayout, record.RecordDate)
+			if err != nil || recordTime.Before(start) || recordTime.After(end) {
+				continue
+			}
+
+			dayItems[record.RecordDate] = append(dayItems[record.RecordDate], GoalCalendarDayRecord{
+				GoalID:      goal.ID,
+				Name:        goal.Name,
+				GoalType:    goal.GoalType,
+				Unit:        goal.Unit,
+				IsCompleted: record.IsCompleted,
+				Quantity:    record.Quantity,
+			})
+		}
+	}
+
+	details := make([]GoalPeriodDetail, 0, len(dayItems))
+	for current := end; !current.Before(start); current = current.AddDate(0, 0, -1) {
+		dateStr := current.Format(goalDateLayout)
+		items := dayItems[dateStr]
+		if len(items) == 0 {
+			continue
+		}
+
+		details = append(details, GoalPeriodDetail{
+			Date:           dateStr,
+			CompletedGoals: len(items),
+			Items:          items,
+		})
+	}
+
+	return details
+}
+
+func buildDashboardSummaryCounts(goals []models.Goal, recordsByGoal map[uint][]models.GoalRecord, anchorDate time.Time) (int, int) {
+	todayKey := today().Format(goalDateLayout)
+	yearStart, yearEnd := yearBounds(anchorDate.Year(), anchorDate.Location())
+	todayCompletedCount := 0
+	annualCheckinTotal := 0
+
+	for _, goal := range goals {
+		records := recordsByGoal[goal.ID]
+		hasTodayRecord := false
+		for _, record := range records {
+			recordTime, err := time.Parse(goalDateLayout, record.RecordDate)
+			if err != nil {
+				continue
+			}
+			if !recordTime.Before(yearStart) && !recordTime.After(yearEnd) {
+				annualCheckinTotal++
+			}
+			if record.RecordDate == todayKey {
+				hasTodayRecord = true
+			}
+		}
+		if hasTodayRecord {
+			todayCompletedCount++
+		}
+	}
+
+	return todayCompletedCount, annualCheckinTotal
+}
+
+func buildYearSummary(year int, goals []models.Goal, recordsByGoal map[uint][]models.GoalRecord, start, end time.Time) GoalYearSummaryResponse {
+	recordedGoals := make(map[uint]struct{})
+	recordedDays := make(map[string]struct{})
+	totalCheckins := 0
+
+	for _, goal := range goals {
+		for _, record := range recordsByGoal[goal.ID] {
+			recordTime, err := time.Parse(goalDateLayout, record.RecordDate)
+			if err != nil || recordTime.Before(start) || recordTime.After(end) {
+				continue
+			}
+			totalCheckins++
+			recordedGoals[goal.ID] = struct{}{}
+			recordedDays[record.RecordDate] = struct{}{}
+		}
+	}
+
+	return GoalYearSummaryResponse{
+		Year:              year,
+		HasRecords:        totalCheckins > 0,
+		RecordedGoalCount: len(recordedGoals),
+		TotalCheckins:     totalCheckins,
+		RecordedDays:      len(recordedDays),
+		StartDate:         start.Format(goalDateLayout),
+		EndDate:           end.Format(goalDateLayout),
+	}
+}
+
 func parseAnchorDate(value string) (time.Time, error) {
 	if strings.TrimSpace(value) == "" {
 		return today(), nil
@@ -618,7 +742,7 @@ func parseAnchorDate(value string) (time.Time, error) {
 
 func resolveCheckinDate(value string) (time.Time, error) {
 	if strings.TrimSpace(value) == "" {
-		return today().AddDate(0, 0, -1), nil
+		return defaultCheckinDate(), nil
 	}
 
 	parsed, err := time.Parse(goalDateLayout, value)
@@ -627,10 +751,26 @@ func resolveCheckinDate(value string) (time.Time, error) {
 	}
 
 	if !isEditableRecordDate(parsed) {
-		return time.Time{}, errors.New("只能填写今天或昨天的打卡记录")
+		return time.Time{}, errors.New("只能填写今年且不晚于今天的打卡记录")
 	}
 
 	return parsed, nil
+}
+
+func resolveSummaryYear(value string) (int, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return today().Year(), nil
+	}
+
+	year, err := strconv.Atoi(trimmed)
+	if err != nil {
+		return 0, errors.New("年份格式无效，应为 YYYY")
+	}
+	if year < 2000 || year > today().Year() {
+		return 0, errors.New("年份超出可查询范围")
+	}
+	return year, nil
 }
 
 func resolveCalendarMonth(value string, anchorDate time.Time) (string, time.Time, time.Time, error) {
@@ -688,7 +828,7 @@ func normalizeRange(value string) string {
 	case "week", "month", "quarter", "year", "all":
 		return strings.TrimSpace(value)
 	default:
-		return "month"
+		return "year"
 	}
 }
 
@@ -698,16 +838,16 @@ func validateRecordDate(value string) (string, error) {
 		return "", errors.New("日期格式无效，应为 YYYY-MM-DD")
 	}
 	if !isEditableRecordDate(parsed) {
-		return "", errors.New("只能填写今天或昨天的打卡记录")
+		return "", errors.New("只能填写今年且不晚于今天的打卡记录")
 	}
 	return parsed.Format(goalDateLayout), nil
 }
 
 func isEditableRecordDate(date time.Time) bool {
 	t := today()
-	y := t.AddDate(0, 0, -1)
 	date = time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
-	return sameDay(date, t) || sameDay(date, y)
+	startOfYear := time.Date(t.Year(), 1, 1, 0, 0, 0, 0, t.Location())
+	return !date.Before(startOfYear) && !date.After(t)
 }
 
 func sameDay(a, b time.Time) bool {
@@ -717,6 +857,27 @@ func sameDay(a, b time.Time) bool {
 func today() time.Time {
 	now := time.Now()
 	return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+}
+
+func defaultCheckinDate() time.Time {
+	t := today()
+	yesterday := t.AddDate(0, 0, -1)
+	if yesterday.Year() < t.Year() {
+		return time.Date(t.Year(), 1, 1, 0, 0, 0, 0, t.Location())
+	}
+	return yesterday
+}
+
+func yearBounds(year int, location *time.Location) (time.Time, time.Time) {
+	start := time.Date(year, 1, 1, 0, 0, 0, 0, location)
+	end := time.Date(year, 12, 31, 0, 0, 0, 0, location)
+	return start, end
+}
+
+func listAllGoals() ([]models.Goal, error) {
+	var goals []models.Goal
+	err := db.DB.Order("sort_order ASC").Order("id ASC").Find(&goals).Error
+	return goals, err
 }
 
 func nextGoalSortOrder() int {

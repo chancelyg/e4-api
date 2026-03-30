@@ -182,17 +182,17 @@ goreleaser release --clean
 3. `config.yaml`
 4. 内置默认值
 
-### 推荐做法
+### 当前推荐分工
 
-- 本地开发：优先使用 `config.yaml` 保存非敏感默认项
-- 部署环境：把敏感项放进 `.env` 或外部环境变量
-- 不要把生产账号、密码哈希、secret 写进仓库内的 `config.yaml`
+- `config.yaml`：数据库、管理员用户名、bcrypt 密码哈希、TOTP 配置、限流参数、站点标题
+- `.env`：服务监听参数和会话签名密钥
+- 显式环境变量：可以覆盖所有配置项，适合 systemd、Docker、CI/CD 注入
 
-### 关键配置项
+### `config.yaml` 配置示例
 
 ```yaml
 server:
-  host: 127.0.0.1
+  host: 0.0.0.0
   port: 8080
   mode: development
 
@@ -200,33 +200,51 @@ database:
   dsn: ./data/app.db
 
 auth:
+  username: admin
+  # bcrypt hash for the password "admin"
+  password: "$2a$10$5OUxfHLfhWa1sYDlpuarQevoiPznWTmM1OZjLS.vtlbj7zsW6gMvG"
   totp_secret: ""
   rate_limit: 5
   lockout_minutes: 15
 
 site:
-  title: e4-api
+  title: E4 Diary
 ```
 
-### 环境变量
+### 配置来源矩阵
+
+| 配置项 | 显式环境变量 | `.env` | `config.yaml` 写法 | 默认值 |
+|------|------|------|------|------|
+| `server.host` | `E4_SERVER_HOST` | 支持 | `server.host` | `127.0.0.1` |
+| `server.port` | `E4_SERVER_PORT` | 支持 | `server.port` | `8080` |
+| `server.mode` | `E4_SERVER_MODE` | 支持 | `server.mode` | `development` |
+| `database.dsn` | `E4_DATABASE_DSN` | 不支持 | `database.dsn` | `./data/app.db` |
+| `auth.username` | `E4_AUTH_USERNAME` | 不支持 | `auth.username` | `admin` |
+| `auth.password` | `E4_AUTH_PASSWORD` | 不支持 | `auth.password` | 内置默认 admin 的 bcrypt hash |
+| `auth.secret` | `E4_AUTH_SECRET` | 支持 | `auth.secret` | `your-secret-key-change-in-production` |
+| `auth.totp_secret` | `E4_AUTH_TOTP_SECRET` | 不支持 | `auth.totp_secret` | `""` |
+| `auth.rate_limit` | `E4_AUTH_RATE_LIMIT` | 不支持 | `auth.rate_limit` | `5` |
+| `auth.lockout_minutes` | `E4_AUTH_LOCKOUT_MINUTES` | 不支持 | `auth.lockout_minutes` | `15` |
+| `site.title` | `E4_SITE_TITLE` | 不支持 | `site.title` | `E4 Diary` |
+
+说明：
+
+- `.env` 只会自动加载 `server.host`、`server.port`、`server.mode`、`auth.secret`
+- 其余项虽然支持“显式环境变量覆盖”，但不会从 `.env` 自动吸收
+- `config.yaml` 中的键路径使用表格里的 `server.host` / `auth.password` 这种层级写法
+
+### `.env` 示例
 
 参考 `.env.example`：
 
 - `E4_SERVER_HOST`
 - `E4_SERVER_PORT`
 - `E4_SERVER_MODE`
-- `E4_DATABASE_DSN`
-- `E4_AUTH_USERNAME`
-- `E4_AUTH_PASSWORD`
 - `E4_AUTH_SECRET`
-- `E4_AUTH_TOTP_SECRET`
-- `E4_AUTH_RATE_LIMIT`
-- `E4_AUTH_LOCKOUT_MINUTES`
-- `E4_SITE_TITLE`
 
 ## 安全说明
 
-当前仓库保留了开发默认配置，便于本地快速启动，但生产环境必须通过 `.env` 或外部环境变量覆盖：
+当前仓库保留了开发默认配置，便于本地快速启动，但生产环境必须覆盖：
 
 - `auth.username`
 - `auth.password`
@@ -234,7 +252,7 @@ site:
 
 同时建议部署时保持：
 
-- `server.host=127.0.0.1`，仅让 Nginx/Caddy 在本机反代
+- `server.host=127.0.0.1`，仅让 Nginx/Caddy 在本机反代；如容器内部监听可改为 `0.0.0.0`
 - `server.mode=release`
 - HTTPS 终止在反向代理层
 

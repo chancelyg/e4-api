@@ -48,13 +48,12 @@ interface DiaryStats {
 	time_span_days: number;
 }
 
-type GoalType = 'checkbox' | 'quantity' | 'frequency';
 type GoalRange = 'week' | 'month' | 'quarter' | 'year' | 'all';
 
 interface Goal {
 	id: number;
 	name: string;
-	goal_type: GoalType;
+	description: string;
 	unit: string;
 	annual_target: number | null;
 	weekly_target: number | null;
@@ -73,7 +72,7 @@ interface GoalRecordPayload {
 interface GoalDashboardItem {
 	id: number;
 	name: string;
-	goal_type: GoalType;
+	description: string;
 	unit: string;
 	annual_target: number | null;
 	weekly_target: number | null;
@@ -98,7 +97,6 @@ interface GoalCalendarDay {
 interface GoalCalendarDayRecord {
 	goal_id: number;
 	name: string;
-	goal_type: GoalType;
 	unit: string;
 	is_completed: boolean;
 	quantity: number | null;
@@ -111,17 +109,37 @@ interface GoalCalendarDayDetail {
 	items: GoalCalendarDayRecord[];
 }
 
+interface GoalPeriodDetail {
+	date: string;
+	completed_goals: number;
+	items: GoalCalendarDayRecord[];
+}
+
 interface GoalDashboard {
 	anchor_date: string;
 	range: GoalRange;
 	range_start_date: string;
 	range_end_date: string;
 	checkin_date: string;
+	today_completed_count: number;
+	annual_checkin_total: number;
 	calendar_month: string;
 	goals: GoalDashboardItem[];
 	inactive_goals: Goal[];
 	calendar_days: GoalCalendarDay[];
 	day_details: GoalCalendarDayDetail[];
+	week_details: GoalPeriodDetail[];
+	month_details: GoalPeriodDetail[];
+}
+
+interface GoalYearSummary {
+	year: number;
+	has_records: boolean;
+	recorded_goal_count: number;
+	total_checkins: number;
+	recorded_days: number;
+	start_date: string;
+	end_date: string;
 }
 
 async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
@@ -211,13 +229,13 @@ export const goalsAPI = {
 	list: () =>
 		fetchAPI<{ goals: Goal[] }>('/goals'),
 
-	create: (data: { reactivate_id?: number; name: string; goal_type: GoalType; unit?: string; annual_target?: number; weekly_target?: number }) =>
+	create: (data: { reactivate_id?: number; name: string; description?: string; unit?: string; annual_target?: number; weekly_target?: number }) =>
 		fetchAPI<Goal>('/goals', {
 			method: 'POST',
 			body: JSON.stringify(data)
 		}),
 
-	update: (id: number, data: { name?: string; unit?: string; annual_target?: number; weekly_target?: number }) =>
+	update: (id: number, data: { name?: string; description?: string; unit?: string; annual_target?: number; weekly_target?: number }) =>
 		fetchAPI<Goal>(`/goals/${id}`, {
 			method: 'PUT',
 			body: JSON.stringify(data)
@@ -236,6 +254,12 @@ export const goalsAPI = {
 		if (params?.month) query.set('month', params.month);
 
 		return fetchAPI<GoalDashboard>(`/goals/dashboard?${query}`);
+	},
+
+	yearSummary: (year?: number) => {
+		const query = new URLSearchParams();
+		if (year) query.set('year', year.toString());
+		return fetchAPI<GoalYearSummary>(`/goals/year-summary?${query}`);
 	},
 
 	upsertRecord: (id: number, date: string, data?: { quantity?: number }) =>
@@ -257,11 +281,12 @@ export type {
 	AuthStatus,
 	LoginResponse,
 	Goal,
-	GoalType,
 	GoalRange,
 	GoalDashboard,
 	GoalDashboardItem,
 	GoalCalendarDay,
 	GoalCalendarDayDetail,
+	GoalPeriodDetail,
+	GoalYearSummary,
 	GoalRecordPayload
 };

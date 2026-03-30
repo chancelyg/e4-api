@@ -1,5 +1,5 @@
 server:
-  host: 127.0.0.1
+  host: 0.0.0.0
   port: 8080
   mode: development
 
@@ -7,9 +7,12 @@ database:
   dsn: ./data/app.db
 
 auth:
+  username: admin
+  # bcrypt hash for the default password "admin". Override this in production.
+  password: "$2a$10$5OUxfHLfhWa1sYDlpuarQevoiPznWTmM1OZjLS.vtlbj7zsW6gMvG"
   totp_secret: ""
   rate_limit: 5
   lockout_minutes: 15
 
 site:
-  title: e4-api
+  title: E4 Diary

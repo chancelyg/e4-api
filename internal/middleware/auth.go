@@ -47,8 +47,10 @@ func NewAuthMiddleware(secret string) *AuthMiddleware {
 
 func (a *AuthMiddleware) ValidateSession(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
+		requestID := c.Response().Header().Get(echo.HeaderXRequestID)
 		cookie, err := c.Cookie(SessionCookieName)
 		if err != nil || cookie.Value == "" {
+			log.Printf("session missing request_id=%s ip=%s path=%s", requestID, c.RealIP(), c.Path())
 			return c.JSON(http.StatusUnauthorized, map[string]string{
 				"error": "未登录或会话已过期",
 			})
@@ -56,11 +58,13 @@ func (a *AuthMiddleware) ValidateSession(next echo.HandlerFunc) echo.HandlerFunc
 
 		sessionID, session, err := a.parseSession(cookie.Value)
 		if err != nil || !session.IsLoggedIn {
+			log.Printf("session invalid request_id=%s ip=%s path=%s error=%v", requestID, c.RealIP(), c.Path(), err)
 			return c.JSON(http.StatusUnauthorized, map[string]string{
 				"error": "未登录或会话已过期",
 			})
 		}
 
+		log.Printf("session validated request_id=%s ip=%s username=%q path=%s", requestID, c.RealIP(), session.Username, c.Path())
 		c.Set("username", session.Username)
 		c.Set("session_id", sessionID)
 		return next(c)
@@ -77,6 +81,7 @@ func (a *AuthMiddleware) CreateSession(username string) string {
 
 func (a *AuthMiddleware) DestroySession(sessionID string) {
 	if sessionID == "" || db.DB == nil {
+		log.Printf("session destroy skipped session_present=%t db_ready=%t", sessionID != "", db.DB != nil)
 		return
 	}
 	if parsedSessionID, ok := extractSessionID(sessionID); ok {
@@ -91,6 +96,7 @@ func (a *AuthMiddleware) DestroySession(sessionID string) {
 
 	_ = db.DB.Where("expires_at <= ?", time.Now()).Delete(&models.SessionRevocation{}).Error
 	_ = db.DB.Save(&record).Error
+	log.Printf("session revoked expires_at=%s", expiresAt.Format(time.RFC3339))
 }
 
 func (a *AuthMiddleware) GetSession(token string) *SessionData {

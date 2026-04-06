@@ -202,6 +202,54 @@ func TestDiaryListSupportsFuzzySearch(t *testing.T) {
 	assert.Contains(t, response.Diaries[0].Content, "登录刷新")
 }
 
+func TestDiaryListSortsFilteredResultsAscendingByDefault(t *testing.T) {
+	handler, e := setupTestDiaryHandler(t)
+	seedDiaries(t, []models.Diary{
+		{Content: "项目复盘", CreateDate: "2024-03-01"},
+		{Content: "项目推进", CreateDate: "2024-03-03"},
+		{Content: "项目收尾", CreateDate: "2024-03-05"},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/diary?search=%E9%A1%B9%E7%9B%AE", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	err := handler.List(c)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var response DiaryListResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response))
+	require.Len(t, response.Diaries, 3)
+	assert.Equal(t, "2024-03-01", response.Diaries[0].CreateDate)
+	assert.Equal(t, "2024-03-03", response.Diaries[1].CreateDate)
+	assert.Equal(t, "2024-03-05", response.Diaries[2].CreateDate)
+}
+
+func TestDiaryListSupportsDescendingSortForFilteredResults(t *testing.T) {
+	handler, e := setupTestDiaryHandler(t)
+	seedDiaries(t, []models.Diary{
+		{Content: "项目复盘", CreateDate: "2024-03-01"},
+		{Content: "项目推进", CreateDate: "2024-03-03"},
+		{Content: "项目收尾", CreateDate: "2024-03-05"},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/diary?search=%E9%A1%B9%E7%9B%AE&sort=desc", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	err := handler.List(c)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var response DiaryListResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response))
+	require.Len(t, response.Diaries, 3)
+	assert.Equal(t, "2024-03-05", response.Diaries[0].CreateDate)
+	assert.Equal(t, "2024-03-03", response.Diaries[1].CreateDate)
+	assert.Equal(t, "2024-03-01", response.Diaries[2].CreateDate)
+}
+
 func TestDiaryGetReturnsDiaryByID(t *testing.T) {
 	handler, e := setupTestDiaryHandler(t)
 	seedDiaries(t, []models.Diary{{Content: "查看详情", CreateDate: "2024-03-10"}})
@@ -248,6 +296,57 @@ func TestDiaryGetReturnsNotFound(t *testing.T) {
 	c.SetParamValues("42")
 
 	err := handler.Get(c)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusNotFound, rec.Code)
+	assert.JSONEq(t, `{"error":"日记不存在"}`, rec.Body.String())
+}
+
+func TestDiaryDeleteRemovesDiary(t *testing.T) {
+	handler, e := setupTestDiaryHandler(t)
+	seedDiaries(t, []models.Diary{{Content: "要删除的日记", CreateDate: "2024-03-11"}})
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/diary/1", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/api/diary/:id")
+	c.SetParamNames("id")
+	c.SetParamValues("1")
+
+	err := handler.Delete(c)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusNoContent, rec.Code)
+	assert.Empty(t, rec.Body.String())
+
+	var count int64
+	require.NoError(t, db.DB.Model(&models.Diary{}).Count(&count).Error)
+	assert.Equal(t, int64(0), count)
+}
+
+func TestDiaryDeleteRejectsInvalidID(t *testing.T) {
+	handler, e := setupTestDiaryHandler(t)
+	req := httptest.NewRequest(http.MethodDelete, "/api/diary/abc", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/api/diary/:id")
+	c.SetParamNames("id")
+	c.SetParamValues("abc")
+
+	err := handler.Delete(c)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.JSONEq(t, `{"error":"无效的日记 ID"}`, rec.Body.String())
+}
+
+func TestDiaryDeleteReturnsNotFound(t *testing.T) {
+	handler, e := setupTestDiaryHandler(t)
+	req := httptest.NewRequest(http.MethodDelete, "/api/diary/42", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/api/diary/:id")
+	c.SetParamNames("id")
+	c.SetParamValues("42")
+
+	err := handler.Delete(c)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusNotFound, rec.Code)
 	assert.JSONEq(t, `{"error":"日记不存在"}`, rec.Body.String())

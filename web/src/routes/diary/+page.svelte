@@ -2,21 +2,32 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { diaryAPI, type Diary, type DiaryStats } from '$lib/api';
-	import { auth } from '$lib/stores.svelte';
 	import { formatMonthLabel, formatWeekday, getCurrentMonthString, getMonthRange, shiftMonth, shiftYear } from '$lib/date';
+	import { auth } from '$lib/stores.svelte';
+
+	const initialMonth = getCurrentMonthString();
 
 	let diaries = $state<Diary[]>([]);
 	let stats = $state<DiaryStats | null>(null);
 	let total = $state(0);
 	let page = $state(1);
-	const perPage = 50;
-	let search = $state('');
-	let month = $state('');
-	let monthCursor = $state(getCurrentMonthString());
+	const searchPerPage = 50;
+	const monthPerPage = 50;
+	let listSort = $state<'asc' | 'desc'>('asc');
+	let searchInput = $state('');
+	let searchQuery = $state('');
+	let monthCursor = $state(initialMonth);
+	let pendingMonth = $state(initialMonth);
 	let draftContent = $state('');
 	let isLoading = $state(true);
+	let isListRefreshing = $state(false);
+	let hasLoadedOnce = $state(false);
 	let isSaving = $state(false);
 	let saveError = $state('');
+	let showDeleteModal = $state(false);
+	let diaryToDelete = $state<Diary | null>(null);
+	let deleteError = $state('');
+	let isDeleting = $state(false);
 
 	onMount(() => {
 		void initPage();
@@ -28,28 +39,39 @@
 			goto('/');
 			return;
 		}
+
 		await loadData();
 	}
 
 	async function loadData() {
-		isLoading = true;
+		const isInitialLoad = !hasLoadedOnce;
+		if (isInitialLoad) {
+			isLoading = true;
+		} else {
+			isListRefreshing = true;
+		}
+
 		try {
-			const normalizedSearch = search.trim();
-			const activeMonth = month || monthCursor;
-			const range = month ? getMonthRange(activeMonth) : null;
+			const normalizedSearch = searchQuery.trim();
+			const isKeywordSearch = normalizedSearch.length > 0;
+			const range = isKeywordSearch ? null : getMonthRange(monthCursor);
+			const sort = isKeywordSearch || monthCursor !== currentMonth ? listSort : undefined;
+			const perPage = isKeywordSearch ? searchPerPage : monthPerPage;
+			const currentPage = isKeywordSearch ? page : 1;
 
 			const [diariesResult, statsResult] = await Promise.all([
 				diaryAPI.list({
-					page,
+					page: currentPage,
 					per_page: perPage,
 					search: normalizedSearch,
 					start_date: range?.startDate,
-					end_date: range?.endDate
+					end_date: range?.endDate,
+					sort
 				}),
 				diaryAPI.stats()
 			]);
 
-			search = normalizedSearch;
+			searchQuery = normalizedSearch;
 			diaries = diariesResult.diaries;
 			total = diariesResult.total;
 			stats = statsResult;
@@ -58,7 +80,11 @@
 			diaries = [];
 			total = 0;
 		} finally {
-			isLoading = false;
+			if (isInitialLoad) {
+				isLoading = false;
+				hasLoadedOnce = true;
+			}
+			isListRefreshing = false;
 		}
 	}
 
@@ -73,8 +99,12 @@
 		saveError = '';
 
 		try {
-			await diaryAPI.create({ content });
+			const createdDiary = await diaryAPI.create({ content });
 			draftContent = '';
+			searchInput = '';
+			searchQuery = '';
+			monthCursor = createdDiary.create_date.slice(0, 7);
+			pendingMonth = monthCursor;
 			page = 1;
 			await loadData();
 		} catch (err) {
@@ -85,33 +115,114 @@
 	}
 
 	function handleSearch() {
+		const normalizedSearch = searchInput.trim();
+		searchInput = normalizedSearch;
+
+		if (!normalizedSearch) {
+			resetToCurrentMonth();
+			return;
+		}
+
+		searchQuery = normalizedSearch;
+		listSort = 'asc';
 		page = 1;
-		month = monthCursor;
 		void loadData();
 	}
 
-	function clearFilters() {
-		search = '';
-		month = '';
-		monthCursor = getCurrentMonthString();
+	function openMonth(month: string) {
+		if (!month) {
+			return;
+		}
+		if (month === monthCursor && !searchQuery) {
+			pendingMonth = month;
+			return;
+		}
+
+		monthCursor = month;
+		pendingMonth = month;
+		searchInput = '';
+		searchQuery = '';
+		listSort = 'asc';
+		page = 1;
+		void loadData();
+	}
+
+	function applyPendingMonth() {
+		if (!searchQuery && pendingMonth === monthCursor) {
+			return;
+		}
+		openMonth(pendingMonth);
+	}
+
+	function resetToCurrentMonth() {
+		const currentMonth = getCurrentMonthString();
+		monthCursor = currentMonth;
+		pendingMonth = currentMonth;
+		searchInput = '';
+		searchQuery = '';
+		listSort = 'asc';
+		page = 1;
+		void loadData();
+	}
+
+	function setListSort(nextSort: 'asc' | 'desc') {
+		if (listSort === nextSort) {
+			return;
+		}
+
+		listSort = nextSort;
 		page = 1;
 		void loadData();
 	}
 
 	function shiftCursor(deltaMonths: number) {
-		const nextMonth = shiftMonth(monthCursor, deltaMonths);
-		monthCursor = nextMonth;
-		page = 1;
-		month = nextMonth;
-		void loadData();
+		openMonth(shiftMonth(monthCursor, deltaMonths));
 	}
 
-	function shiftCursorYear(deltaYears: number) {
-		const nextMonth = shiftYear(monthCursor, deltaYears);
-		monthCursor = nextMonth;
-		page = 1;
-		month = nextMonth;
-		void loadData();
+	function shiftPendingMonth(deltaMonths: number) {
+		pendingMonth = shiftMonth(pendingMonth, deltaMonths);
+	}
+
+	function shiftPendingYear(deltaYears: number) {
+		pendingMonth = shiftYear(pendingMonth, deltaYears);
+	}
+
+	function openDeleteModal(diary: Diary) {
+		diaryToDelete = diary;
+		deleteError = '';
+		showDeleteModal = true;
+	}
+
+	function closeDeleteModal() {
+		showDeleteModal = false;
+		diaryToDelete = null;
+		deleteError = '';
+	}
+
+	async function confirmDeleteDiary() {
+		if (!diaryToDelete) {
+			return;
+		}
+
+		isDeleting = true;
+		deleteError = '';
+
+		try {
+			await diaryAPI.delete(diaryToDelete.id);
+			closeDeleteModal();
+			if (searchQuery && diaries.length === 1 && page > 1) {
+				page -= 1;
+			}
+			await loadData();
+		} catch (err) {
+			deleteError = err instanceof Error ? err.message : '删除失败';
+		} finally {
+			isDeleting = false;
+		}
+	}
+
+	function getDiaryPreview(content: string) {
+		return content.length > 90 ? `${content.slice(0, 90)}...` : content;
 	}
 
 	function getFrequencyPercent() {
@@ -120,11 +231,44 @@
 	}
 
 	function getPageCount() {
-		return Math.max(1, Math.ceil(total / perPage));
+		return Math.max(1, Math.ceil(total / searchPerPage));
 	}
 
+	function getMonthParts(value: string) {
+		const [year, month] = value.split('-').map(Number);
+		return { year, month };
+	}
+
+	const currentMonth = $derived(getCurrentMonthString());
 	const monthLabel = $derived(formatMonthLabel(monthCursor));
-	const activeMonthLabel = $derived(month ? formatMonthLabel(month) : '全部月份');
+	const pendingMonthLabel = $derived(formatMonthLabel(pendingMonth));
+	const pendingMonthParts = $derived(getMonthParts(pendingMonth));
+	const isSearchMode = $derived(searchQuery.length > 0);
+	const isCurrentMonthView = $derived(!searchQuery && monthCursor === currentMonth);
+	const isFilteredMonthView = $derived(!searchQuery && monthCursor !== currentMonth);
+	const canAdjustSort = $derived(isSearchMode || monthCursor !== currentMonth);
+	const canApplyPendingMonth = $derived(isSearchMode || pendingMonth !== monthCursor);
+	const listTitle = $derived(
+		searchQuery ? '搜索结果' : monthCursor === currentMonth ? '本月日记' : `${formatMonthLabel(monthCursor)}日记`
+	);
+	const listDescription = $derived(
+		searchQuery
+			? `关键词搜索结果当前按${listSort === 'asc' ? '从远到近' : '从近到远'}排列。`
+			: monthCursor === currentMonth
+				? `${formatMonthLabel(monthCursor)}的日记按日期从近到远排列。`
+				: `${formatMonthLabel(monthCursor)}的日记当前按${listSort === 'asc' ? '从远到近' : '从近到远'}排列。`
+	);
+	const timeSelectionHint = $derived(
+		isSearchMode
+			? '确认后退出关键词搜索，并切换到这一个月份。'
+			: pendingMonth === monthCursor
+				? '当前展示时间已与上方选择一致。'
+				: '确认后会切换到这一个月份。'
+	);
+	const sortDescription = $derived(
+		isSearchMode ? '关键词搜索结果默认从远到近，可切换为从近到远。' : '指定月份结果默认从远到近，可切换为从近到远。'
+	);
+	const canSearch = $derived(searchInput.trim().length > 0);
 </script>
 
 <div class="diary-page">
@@ -137,7 +281,7 @@
 			<div>
 				<p class="overview-kicker">Diary Archive</p>
 				<h1>日记</h1>
-				<p class="overview-text">写一小段信，马上入库。回看时按关键词和年月切换，不跳页，不打断，不截断内容。</p>
+				<p class="overview-text">不积跬步，无以成千里；不积小流，无以成江海。</p>
 			</div>
 			<div class="overview-stats">
 				<div>
@@ -193,8 +337,8 @@
 				class="composer-textarea"
 				maxlength="300"
 				placeholder="一般不会超过 300 字，想到什么就写什么。"
-				onkeydown={(e) => {
-					if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && !isSaving) {
+				onkeydown={(event) => {
+					if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && !isSaving) {
 						void handleCreateDiary();
 					}
 				}}
@@ -205,48 +349,166 @@
 			</div>
 		</section>
 
+		{#if isListRefreshing}
+			<div class="refresh-indicator">正在更新日记列表...</div>
+		{/if}
+
 		<section class="filter-card card">
-			<div class="filter-bar">
-				<label class="filter-search-field">
-					<span>搜索</span>
-					<input
-						type="text"
-						bind:value={search}
-						placeholder="支持整句、分词和模糊检索"
-						onkeydown={(e) => e.key === 'Enter' && handleSearch()}
-					/>
-				</label>
+			<div class="filter-head">
+				<div>
+					<p class="list-kicker">Browse</p>
+					<h2>查找日记</h2>
+					<p class="filter-copy">关键词搜索、时间查看和排序都集中在这里，切换逻辑更清晰，也更适合移动端。</p>
+				</div>
+				<div class="filter-status-group">
+					<span class="filter-mode-pill">
+						{#if isSearchMode}
+							关键词搜索中
+						{:else if isCurrentMonthView}
+							默认显示本月日记
+						{:else}
+							按时间查看：{monthLabel}
+						{/if}
+					</span>
+					<span class="filter-sub-pill">排序：{listSort === 'asc' ? '从远到近' : '从近到远'}</span>
+				</div>
+			</div>
 
-				<div class="month-strip" aria-label="月份回看">
-					<span class="month-strip-label">月份回看</span>
-					<button type="button" class="btn btn-sm variant-soft-surface" onclick={() => shiftCursorYear(-1)}>«</button>
-					<button type="button" class="btn btn-sm variant-soft-surface" onclick={() => shiftCursor(-1)}>‹</button>
-					<div class="month-chip">
-						<strong>{monthLabel}</strong>
-						<small>{activeMonthLabel}</small>
+			<div class="filter-grid">
+				<article class="filter-panel">
+					<div class="filter-panel-head">
+						<div>
+							<p class="filter-panel-kicker">关键词搜索</p>
+							<h3>全局模糊查询</h3>
+						</div>
+						{#if isSearchMode}
+							<span class="filter-panel-badge">跨月份</span>
+						{/if}
 					</div>
-					<button type="button" class="btn btn-sm variant-soft-surface" onclick={() => shiftCursor(1)}>›</button>
-					<button type="button" class="btn btn-sm variant-soft-surface" onclick={() => shiftCursorYear(1)}>»</button>
-				</div>
 
-				<div class="filter-actions">
-					<button type="button" onclick={handleSearch} class="btn variant-filled-primary">查询</button>
-					{#if search || month}
-						<button type="button" onclick={clearFilters} class="btn variant-soft-surface">清除</button>
-					{/if}
-				</div>
+					<label class="filter-search-field">
+						<span>输入关键词</span>
+						<input
+							class="input"
+							type="text"
+							bind:value={searchInput}
+							placeholder="例如：散步、工作总结、心情"
+							onkeydown={(event) => event.key === 'Enter' && handleSearch()}
+						/>
+					</label>
+
+					<p class="filter-helper">支持整句、分词和模糊检索，不会自动叠加月份条件。</p>
+
+					<div class="filter-actions">
+						<button type="button" onclick={handleSearch} class="btn variant-filled-primary" disabled={!canSearch}>搜索</button>
+						{#if searchInput || isSearchMode}
+							<button type="button" onclick={resetToCurrentMonth} class="btn variant-soft-surface">清除并看本月</button>
+						{/if}
+					</div>
+				</article>
+
+				<article class="filter-panel filter-panel-compact">
+					<div class="filter-panel-head">
+						<div>
+							<p class="filter-panel-kicker">排序</p>
+							<h3>控制列表时间顺序</h3>
+						</div>
+						{#if canAdjustSort}
+							<span class="filter-panel-badge">已启用</span>
+						{:else}
+							<span class="filter-panel-badge">本月固定</span>
+						{/if}
+					</div>
+
+					<p class="filter-helper">{sortDescription}</p>
+
+					<div class="sort-segment" aria-label="日记排序顺序">
+						<button
+							type="button"
+							class:sort-segment-active={listSort === 'asc'}
+							class="sort-segment-button"
+							onclick={() => setListSort('asc')}
+							disabled={!canAdjustSort}
+						>
+							从远到近
+						</button>
+						<button
+							type="button"
+							class:sort-segment-active={listSort === 'desc'}
+							class="sort-segment-button"
+							onclick={() => setListSort('desc')}
+							disabled={!canAdjustSort}
+						>
+							从近到远
+						</button>
+					</div>
+
+					<p class="sort-tip">{#if canAdjustSort}切换后会刷新当前筛选结果。{:else}本月日记保持默认从近到远展示。{/if}</p>
+				</article>
+
+				<article class="filter-panel">
+					<div class="filter-panel-head">
+						<div>
+							<p class="filter-panel-kicker">按时间查看</p>
+							<h3>先选择，再确认切换</h3>
+						</div>
+						<span class="filter-panel-badge">待切换：{pendingMonthLabel}</span>
+					</div>
+
+					<div class="time-selector-card">
+						<div class="time-selector-section">
+							<span class="time-selector-label">年份</span>
+							<div class="time-stepper">
+								<button type="button" class="btn btn-sm variant-soft-surface time-stepper-button" onclick={() => shiftPendingYear(-1)} aria-label="前一年">
+									-1 年
+								</button>
+								<div class="time-stepper-value">
+									<strong>{pendingMonthParts.year}</strong>
+									<small>当前选择</small>
+								</div>
+								<button type="button" class="btn btn-sm variant-soft-surface time-stepper-button" onclick={() => shiftPendingYear(1)} aria-label="后一年">
+									+1 年
+								</button>
+							</div>
+						</div>
+
+						<div class="time-selector-section">
+							<span class="time-selector-label">月份</span>
+							<div class="time-stepper">
+								<button type="button" class="btn btn-sm variant-soft-surface time-stepper-button" onclick={() => shiftPendingMonth(-1)} aria-label="前一个月">
+									-1 月
+								</button>
+								<div class="time-stepper-value">
+									<strong>{pendingMonthParts.month} 月</strong>
+									<small>{pendingMonthLabel}</small>
+								</div>
+								<button type="button" class="btn btn-sm variant-soft-surface time-stepper-button" onclick={() => shiftPendingMonth(1)} aria-label="后一个月">
+									+1 月
+								</button>
+							</div>
+						</div>
+					</div>
+
+					<p class="filter-helper">{timeSelectionHint}</p>
+
+					<div class="filter-actions">
+						<button type="button" onclick={applyPendingMonth} class="btn variant-filled-primary" disabled={!canApplyPendingMonth}>确认查看</button>
+						<button type="button" onclick={resetToCurrentMonth} class="btn variant-soft-surface" disabled={!isSearchMode && isCurrentMonthView}>
+							回到本月
+						</button>
+					</div>
+				</article>
 			</div>
 		</section>
 
-		{#if search || month}
+		{#if isSearchMode}
 			<div class="active-filters">
-				{#if search && month}
-					关键词“{search}” · {formatMonthLabel(month)}
-				{:else if search}
-					关键词“{search}”
-				{:else}
-					{formatMonthLabel(month)}
-				{/if}
+				<span>关键词“{searchQuery}”</span>
+				<span>共 {total} 篇</span>
+			</div>
+		{:else if !isCurrentMonthView}
+			<div class="active-filters">
+				<span>正在查看 {monthLabel}</span>
 				<span>共 {total} 篇</span>
 			</div>
 		{/if}
@@ -255,17 +517,31 @@
 			<div class="list-card-head">
 				<div>
 					<p class="list-kicker">Entries</p>
-					<h2>{search || month ? '筛选结果' : '最近记录'}</h2>
+					<h2>{listTitle}</h2>
+					<p class="list-copy">{listDescription}</p>
 				</div>
 				<div class="list-card-meta">
 					<span>共 {total} 篇</span>
-					<span>本页 {diaries.length} 篇</span>
+					{#if isSearchMode || isFilteredMonthView}
+						<span>{listSort === 'asc' ? '从远到近' : '从近到远'}</span>
+					{/if}
+					{#if isSearchMode}
+						<span>本页 {diaries.length} 篇</span>
+					{:else}
+						<span>按日期倒序</span>
+					{/if}
 				</div>
 			</div>
 
 			{#if diaries.length === 0}
 				<div class="empty-state">
-					<p>{search || month ? '没有符合条件的日记。' : '还没有日记。先写下第一条吧。'}</p>
+					{#if isSearchMode}
+						<p>没有符合关键词的日记。</p>
+					{:else if isCurrentMonthView}
+						<p>本月还没有日记。</p>
+					{:else}
+						<p>{monthLabel}还没有日记。</p>
+					{/if}
 				</div>
 			{:else}
 				<div class="diary-list">
@@ -279,13 +555,29 @@
 								<p class="diary-content">{diary.content}</p>
 								<div class="diary-row-foot">
 									<span class="diary-length">约 {diary.content.length} 字</span>
+									<div class="diary-row-actions">
+										<button type="button" class="btn btn-sm btn-quiet" onclick={() => openDeleteModal(diary)}>删除</button>
+									</div>
 								</div>
 							</div>
 						</article>
 					{/each}
 				</div>
 
-				{#if total > perPage}
+				{#if !isSearchMode}
+					<div class="month-pagination-shell">
+						<div class="month-pagination-copy">
+							<p class="month-pagination-title">继续按时间查看</p>
+							<p class="month-pagination-subtitle">用列表底部直接切换到相邻月份，不必回到上方操作区。</p>
+						</div>
+						<div class="month-pagination-actions">
+							<button type="button" class="btn variant-soft-surface" onclick={() => shiftCursor(-1)}>上个月</button>
+							<button type="button" class="btn variant-soft-surface" onclick={() => shiftCursor(1)}>下个月</button>
+						</div>
+					</div>
+				{/if}
+
+				{#if isSearchMode && total > searchPerPage}
 					<div class="pagination">
 						<button
 							class="btn variant-soft-surface"
@@ -313,6 +605,37 @@
 			{/if}
 		</section>
 	{/if}
+
+	{#if showDeleteModal && diaryToDelete}
+		<div class="modal-backdrop" role="presentation" onclick={(event) => event.target === event.currentTarget && closeDeleteModal()}>
+			<div class="modal-card card delete-modal" role="dialog" aria-modal="true" aria-labelledby="diary-delete-title">
+				<div class="modal-head">
+					<div>
+						<p class="list-kicker">Delete Diary</p>
+						<h2 id="diary-delete-title">删除日记</h2>
+					</div>
+					<button class="btn btn-quiet" type="button" onclick={closeDeleteModal}>关闭</button>
+				</div>
+				<p class="modal-copy">删除后无法恢复，也不支持编辑。确认要删除这篇日记吗？</p>
+				<div class="delete-meta">
+					<span>{diaryToDelete.create_date}</span>
+					<span>{formatWeekday(diaryToDelete.create_date)}</span>
+				</div>
+				<p class="delete-preview">{getDiaryPreview(diaryToDelete.content)}</p>
+				{#if deleteError}
+					<div class="alert variant-soft-error">
+						<p>{deleteError}</p>
+					</div>
+				{/if}
+				<div class="modal-actions">
+					<button type="button" class="btn variant-soft-surface" onclick={closeDeleteModal}>取消</button>
+					<button type="button" class="btn variant-filled-error" onclick={confirmDeleteDiary} disabled={isDeleting}>
+						{isDeleting ? '删除中...' : '确认删除'}
+					</button>
+				</div>
+			</div>
+		</div>
+	{/if}
 </div>
 
 <style>
@@ -330,6 +653,20 @@
 		padding: 72px 0;
 	}
 
+	.refresh-indicator {
+		position: sticky;
+		top: 8px;
+		z-index: 2;
+		justify-self: end;
+		padding: 8px 12px;
+		border-radius: 999px;
+		background: rgba(255, 248, 240, 0.96);
+		border: 1px solid rgba(140, 90, 60, 0.18);
+		color: var(--color-ink-soft);
+		font-size: 0.88rem;
+		box-shadow: var(--shadow-card);
+	}
+
 	.overview-card {
 		display: flex;
 		justify-content: space-between;
@@ -343,7 +680,8 @@
 
 	.overview-kicker,
 	.composer-kicker,
-	.list-kicker {
+	.list-kicker,
+	.filter-panel-kicker {
 		margin: 0 0 10px;
 		font-size: 12px;
 		letter-spacing: 0.16em;
@@ -353,7 +691,9 @@
 
 	.overview-card h1,
 	.composer-head h2,
-	.list-card-head h2 {
+	.filter-head h2,
+	.list-card-head h2,
+	.modal-head h2 {
 		margin: 0;
 		font-family: var(--font-family-display);
 		font-weight: 600;
@@ -363,16 +703,21 @@
 		font-size: 42px;
 	}
 
-	.composer-head h2 {
+	.composer-head h2,
+	.filter-head h2 {
 		font-size: 30px;
 	}
 
-	.list-card-head h2 {
+	.list-card-head h2,
+	.modal-head h2 {
 		font-size: 28px;
 	}
 
 	.overview-text,
-	.composer-subtext {
+	.composer-subtext,
+	.filter-copy,
+	.list-copy,
+	.modal-copy {
 		margin: 12px 0 0;
 		color: var(--color-ink-soft);
 		line-height: 1.8;
@@ -385,7 +730,7 @@
 	}
 
 	.overview-stats div {
-		padding: 18px 18px;
+		padding: 18px;
 		border: 1px solid rgba(113, 91, 70, 0.13);
 		border-radius: 18px;
 		background: rgba(255, 250, 244, 0.9);
@@ -395,8 +740,8 @@
 	.overview-stats span,
 	.summary-item p,
 	.composer-foot,
-	.month-strip-label,
-	.month-chip small {
+	.filter-search-field span,
+	.filter-helper {
 		display: block;
 		margin: 0;
 		font-size: 13px;
@@ -427,14 +772,15 @@
 		padding: 22px;
 		background: rgba(255, 251, 246, 0.94);
 		box-shadow: 0 16px 34px rgba(53, 39, 27, 0.07);
-	}
-
-	.composer-card {
 		display: grid;
 		gap: 14px;
 	}
 
-	.composer-head {
+	.composer-head,
+	.filter-head,
+	.list-card-head,
+	.modal-head,
+	.modal-actions {
 		display: flex;
 		justify-content: space-between;
 		align-items: flex-start;
@@ -456,8 +802,7 @@
 		color: var(--color-ink);
 	}
 
-	.composer-textarea:focus,
-	.filter-search-field input:focus {
+	.composer-textarea:focus {
 		border-color: rgba(140, 90, 60, 0.45);
 		box-shadow: 0 0 0 4px rgba(140, 90, 60, 0.08);
 	}
@@ -469,11 +814,75 @@
 		flex-wrap: wrap;
 	}
 
-	.filter-bar {
+	.filter-mode-pill,
+	.filter-sub-pill,
+	.filter-panel-badge,
+	.list-card-meta span,
+	.diary-length,
+	.delete-meta span {
+		display: inline-flex;
+		align-items: center;
+		padding: 6px 10px;
+		border-radius: 999px;
+		background: rgba(140, 90, 60, 0.08);
+		color: var(--color-muted);
+		font-size: 13px;
+	}
+
+	.filter-mode-pill {
+		align-self: flex-start;
+		background: rgba(140, 90, 60, 0.12);
+		color: var(--color-ink-soft);
+	}
+
+	.filter-sub-pill {
+		background: rgba(113, 91, 70, 0.08);
+	}
+
+	.filter-status-group {
+		display: flex;
+		flex-wrap: wrap;
+		justify-content: flex-end;
+		gap: 8px;
+	}
+
+	.filter-grid {
 		display: grid;
-		grid-template-columns: minmax(0, 1.2fr) auto auto;
+		grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.9fr) minmax(0, 1.1fr);
 		gap: 16px;
-		align-items: end;
+	}
+
+	.filter-panel {
+		display: grid;
+		gap: 14px;
+		padding: 20px;
+		border: 1px solid rgba(113, 91, 70, 0.11);
+		border-radius: 22px;
+		background:
+			linear-gradient(180deg, rgba(255, 252, 247, 0.96) 0%, rgba(247, 241, 232, 0.86) 100%),
+			rgba(255, 252, 247, 0.78);
+		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+	}
+
+	.filter-panel-compact {
+		align-content: start;
+		background:
+			linear-gradient(180deg, rgba(251, 246, 239, 0.96) 0%, rgba(244, 235, 223, 0.9) 100%),
+			rgba(255, 252, 247, 0.78);
+	}
+
+	.filter-panel-head {
+		display: flex;
+		justify-content: space-between;
+		align-items: flex-start;
+		gap: 12px;
+	}
+
+	.filter-panel-head h3 {
+		margin: 0;
+		font-size: 1.1rem;
+		font-weight: 600;
+		color: var(--color-ink);
 	}
 
 	.filter-search-field {
@@ -481,48 +890,113 @@
 		gap: 8px;
 	}
 
-	.filter-search-field span {
+	.time-selector-card {
+		display: grid;
+		gap: 14px;
+		padding: 16px;
+		border-radius: 20px;
+		background: rgba(247, 240, 231, 0.8);
+		border: 1px solid rgba(113, 91, 70, 0.08);
+	}
+
+	.time-selector-section {
+		display: grid;
+		gap: 8px;
+	}
+
+	.time-selector-label {
 		font-size: 13px;
 		color: var(--color-muted);
 	}
 
-	.filter-search-field input {
-		min-height: 46px;
-		padding: 0 14px;
-		border: 1px solid var(--color-border);
-		border-radius: 14px;
-		background: rgba(255, 255, 255, 0.82);
-	}
-
-	.month-strip {
+	.time-stepper {
 		display: grid;
-		grid-auto-flow: column;
-		grid-auto-columns: max-content;
+		grid-template-columns: auto minmax(0, 1fr) auto;
 		gap: 10px;
-		align-items: center;
-		padding: 10px 12px;
-		border: 1px solid var(--color-border);
+		align-items: stretch;
+	}
+
+	.time-stepper-button {
+		white-space: nowrap;
+	}
+
+	.time-stepper-value {
+		display: grid;
+		place-items: center;
+		padding: 12px;
 		border-radius: 18px;
-		background: linear-gradient(180deg, rgba(255, 252, 247, 0.96) 0%, rgba(248, 241, 232, 0.92) 100%);
-	}
-
-	.month-strip-label {
-		margin-right: 4px;
-	}
-
-	.month-chip {
-		min-width: 124px;
-		padding: 0 4px;
+		background: rgba(255, 252, 247, 0.9);
 		text-align: center;
 	}
 
-	.month-chip strong {
-		display: block;
-		font-size: 1rem;
-		font-weight: 700;
+	.time-stepper-value strong {
+		font-size: 1.05rem;
+		color: var(--color-ink);
 	}
 
-	.filter-actions {
+	.time-stepper-value small {
+		margin-top: 4px;
+		font-size: 12px;
+		color: var(--color-muted);
+	}
+
+	.sort-segment {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		padding: 4px;
+		border-radius: 18px;
+		border: 1px solid rgba(113, 91, 70, 0.14);
+		background: rgba(255, 252, 247, 0.9);
+		gap: 4px;
+	}
+
+	.sort-segment-button {
+		min-height: 42px;
+		padding: 0.7rem 0.9rem;
+		border: none;
+		border-radius: 14px;
+		background: transparent;
+		color: var(--color-muted);
+		font-weight: 600;
+		cursor: pointer;
+		transition: background 0.2s ease, color 0.2s ease, transform 0.2s ease;
+	}
+
+	.sort-segment-button:hover:not(:disabled) {
+		background: rgba(140, 90, 60, 0.08);
+		color: var(--color-ink-soft);
+	}
+
+	.sort-segment-button:disabled {
+		opacity: 0.55;
+		cursor: not-allowed;
+	}
+
+	.sort-segment-active {
+		background: var(--color-accent);
+		color: white;
+		box-shadow: 0 8px 18px rgba(140, 90, 60, 0.18);
+	}
+
+	.sort-tip {
+		margin: 0;
+		font-size: 13px;
+		color: var(--color-muted);
+		line-height: 1.7;
+	}
+
+	.filter-helper,
+	.list-copy,
+	.modal-copy {
+		line-height: 1.7;
+	}
+
+	.filter-actions,
+	.list-card-meta,
+	.diary-row-foot,
+	.diary-row-actions,
+	.delete-meta,
+	.pagination {
 		display: flex;
 		align-items: center;
 		gap: 10px;
@@ -538,38 +1012,16 @@
 		color: var(--color-muted);
 	}
 
-	.list-card-head {
-		display: flex;
-		justify-content: space-between;
-		align-items: flex-start;
-		gap: 16px;
-		padding: 24px 28px 18px;
-		border-bottom: 1px solid rgba(113, 91, 70, 0.08);
-	}
-
-	.list-card-meta {
-		display: flex;
-		gap: 10px;
-		flex-wrap: wrap;
-		justify-content: flex-end;
-	}
-
-	.list-card-meta span,
-	.diary-length {
-		display: inline-flex;
-		align-items: center;
-		padding: 6px 10px;
-		border-radius: 999px;
-		background: rgba(140, 90, 60, 0.08);
-		color: var(--color-muted);
-		font-size: 13px;
-	}
-
 	.list-card {
 		overflow: hidden;
 		background:
 			linear-gradient(180deg, rgba(255, 253, 249, 0.98) 0%, rgba(247, 242, 235, 0.92) 100%),
 			var(--color-panel);
+	}
+
+	.list-card-head {
+		padding: 24px 28px 18px;
+		border-bottom: 1px solid rgba(113, 91, 70, 0.08);
 	}
 
 	.diary-list {
@@ -600,7 +1052,8 @@
 
 	.diary-date,
 	.diary-weekday,
-	.diary-content {
+	.diary-content,
+	.delete-preview {
 		margin: 0;
 	}
 
@@ -623,7 +1076,8 @@
 		gap: 16px;
 	}
 
-	.diary-content {
+	.diary-content,
+	.delete-preview {
 		color: var(--color-ink-soft);
 		line-height: 1.9;
 		white-space: pre-wrap;
@@ -631,11 +1085,7 @@
 	}
 
 	.diary-row-foot {
-		display: flex;
-		align-items: center;
-		justify-content: flex-start;
-		gap: 12px;
-		flex-wrap: wrap;
+		justify-content: space-between;
 	}
 
 	.empty-state {
@@ -649,11 +1099,42 @@
 	}
 
 	.pagination {
+		justify-content: center;
+		padding: 10px 24px 24px;
+	}
+
+	.month-pagination-shell {
 		display: flex;
 		align-items: center;
-		justify-content: center;
-		gap: 14px;
-		padding: 10px 24px 24px;
+		justify-content: space-between;
+		gap: 16px;
+		padding: 0 24px 24px;
+	}
+
+	.month-pagination-copy {
+		display: grid;
+		gap: 6px;
+	}
+
+	.month-pagination-title,
+	.month-pagination-subtitle {
+		margin: 0;
+	}
+
+	.month-pagination-title {
+		font-weight: 600;
+		color: var(--color-ink);
+	}
+
+	.month-pagination-subtitle {
+		font-size: 13px;
+		color: var(--color-muted);
+	}
+
+	.month-pagination-actions {
+		display: flex;
+		gap: 10px;
+		flex-wrap: wrap;
 	}
 
 	.pagination span {
@@ -661,24 +1142,60 @@
 		color: var(--color-muted);
 	}
 
+	.modal-backdrop {
+		position: fixed;
+		inset: 0;
+		display: grid;
+		place-items: center;
+		padding: 24px;
+		background: rgba(27, 22, 18, 0.42);
+		z-index: 40;
+	}
+
+	.modal-card {
+		width: min(100%, 520px);
+		padding: 24px;
+		display: grid;
+		gap: 16px;
+		background:
+			linear-gradient(180deg, rgba(255, 252, 247, 0.98) 0%, rgba(246, 238, 227, 0.96) 100%),
+			var(--color-panel);
+	}
+
+	.modal-head {
+		align-items: center;
+	}
+
+	.delete-preview {
+		padding: 16px;
+		border-radius: 18px;
+		background: rgba(247, 240, 231, 0.92);
+	}
+
+	.modal-card :global(.alert) {
+		margin-bottom: 0;
+	}
+
 	@media (max-width: 960px) {
-		.summary-grid {
-			grid-template-columns: repeat(2, minmax(0, 1fr));
+		.summary-grid,
+		.filter-grid {
+			grid-template-columns: 1fr 1fr;
 		}
 
-		.filter-bar {
-			grid-template-columns: 1fr;
-		}
-
-		.month-strip {
-			justify-content: start;
-			overflow-x: auto;
+		.filter-panel-compact {
+			grid-column: 1 / -1;
 		}
 	}
 
 	@media (max-width: 900px) {
+		.summary-grid,
+		.filter-grid {
+			grid-template-columns: 1fr;
+		}
+
 		.overview-card,
 		.composer-head,
+		.filter-head,
 		.list-card-head,
 		.diary-row {
 			flex-direction: column;
@@ -700,7 +1217,8 @@
 		.composer-card,
 		.filter-card,
 		.list-card-head,
-		.diary-row {
+		.diary-row,
+		.modal-card {
 			padding-left: 16px;
 			padding-right: 16px;
 		}
@@ -719,15 +1237,39 @@
 		}
 
 		.composer-head,
+		.filter-head,
 		.active-filters,
 		.list-card-meta,
 		.composer-foot,
+		.diary-row-foot,
+		.modal-head,
+		.modal-actions,
 		.pagination {
 			flex-direction: column;
 			align-items: stretch;
 		}
 
-		.filter-actions :global(.btn) {
+		.filter-actions :global(.btn),
+		.diary-row-actions :global(.btn),
+		.modal-actions :global(.btn) {
+			width: 100%;
+		}
+
+		.filter-status-group {
+			justify-content: flex-start;
+		}
+
+		.time-stepper {
+			grid-template-columns: 1fr;
+		}
+
+		.sort-segment {
+			grid-template-columns: 1fr;
+		}
+
+		.time-stepper-button,
+		.sort-segment-button,
+		.month-pagination-actions :global(.btn) {
 			width: 100%;
 		}
 
@@ -735,8 +1277,19 @@
 			padding: 12px;
 		}
 
-		.diary-row-meta {
-			padding: 10px 12px;
+		.diary-row-meta,
+		.filter-panel {
+			padding: 12px;
+		}
+
+		.month-pagination-shell,
+		.month-pagination-actions {
+			flex-direction: column;
+			align-items: stretch;
+		}
+
+		.modal-backdrop {
+			padding: 12px;
 		}
 	}
 </style>

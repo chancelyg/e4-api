@@ -50,6 +50,7 @@ func (h *DiaryHandler) List(c echo.Context) error {
 	search := strings.TrimSpace(c.QueryParam("search"))
 	startDate := c.QueryParam("start_date")
 	endDate := c.QueryParam("end_date")
+	sortOrder := normalizeDiarySortOrder(c.QueryParam("sort"), search, startDate, endDate)
 
 	query := db.DB.Model(&models.Diary{})
 
@@ -82,7 +83,7 @@ func (h *DiaryHandler) List(c echo.Context) error {
 
 	var diaries []models.Diary
 	offset := (page - 1) * perPage
-	if result := query.Order("create_date DESC").Offset(offset).Limit(perPage).Find(&diaries); result.Error != nil {
+	if result := query.Order(sortOrder).Offset(offset).Limit(perPage).Find(&diaries); result.Error != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{
 			"error": "获取日记列表失败",
 		})
@@ -92,6 +93,20 @@ func (h *DiaryHandler) List(c echo.Context) error {
 		Diaries: diaries,
 		Total:   total,
 	})
+}
+
+func normalizeDiarySortOrder(rawSort, search, startDate, endDate string) string {
+	hasFilter := strings.TrimSpace(search) != "" || startDate != "" || endDate != ""
+	if !hasFilter {
+		return "create_date DESC, id DESC"
+	}
+
+	sort := strings.ToLower(strings.TrimSpace(rawSort))
+	if sort == "desc" {
+		return "create_date DESC, id DESC"
+	}
+
+	return "create_date ASC, id ASC"
 }
 
 func (h *DiaryHandler) Get(c echo.Context) error {
@@ -151,6 +166,29 @@ func (h *DiaryHandler) Create(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusCreated, diary)
+}
+
+func (h *DiaryHandler) Delete(c echo.Context) error {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "无效的日记 ID",
+		})
+	}
+
+	result := db.DB.Delete(&models.Diary{}, id)
+	if result.Error != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "删除日记失败",
+		})
+	}
+	if result.RowsAffected == 0 {
+		return c.JSON(http.StatusNotFound, map[string]string{
+			"error": "日记不存在",
+		})
+	}
+
+	return c.NoContent(http.StatusNoContent)
 }
 
 func (h *DiaryHandler) Stats(c echo.Context) error {

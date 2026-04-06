@@ -232,7 +232,7 @@ export const authAPI = {
 };
 
 export const diaryAPI = {
-	list: (params?: { page?: number; per_page?: number; search?: string; start_date?: string; end_date?: string }) => {
+	list: (params?: { page?: number; per_page?: number; search?: string; start_date?: string; end_date?: string; sort?: 'asc' | 'desc' }) => {
 		const query = new URLSearchParams();
 		const trimmedSearch = params?.search?.trim();
 		if (params?.page) query.set('page', params.page.toString());
@@ -240,6 +240,7 @@ export const diaryAPI = {
 		if (trimmedSearch) query.set('search', trimmedSearch);
 		if (params?.start_date) query.set('start_date', params.start_date);
 		if (params?.end_date) query.set('end_date', params.end_date);
+		if (params?.sort) query.set('sort', params.sort);
 
 		return fetchAPI<DiaryListResponse>(`/diary?${query}`);
 	},
@@ -251,6 +252,11 @@ export const diaryAPI = {
 		fetchAPI<Diary>('/diary', {
 			method: 'POST',
 			body: JSON.stringify(data)
+		}),
+
+	delete: (id: number) =>
+		fetchAPI<void>(`/diary/${id}`, {
+			method: 'DELETE'
 		}),
 
 	stats: () =>

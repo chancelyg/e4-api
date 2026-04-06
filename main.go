@@ -186,6 +186,7 @@ func main() {
 		protected.POST("/diary", diaryHandler.Create)
 		protected.GET("/diary/stats", diaryHandler.Stats)
 		protected.GET("/diary/:id", diaryHandler.Get)
+		protected.DELETE("/diary/:id", diaryHandler.Delete)
 		protected.GET("/goals", goalHandler.List)
 		protected.POST("/goals", goalHandler.Create)
 		protected.GET("/goals/dashboard", goalHandler.Dashboard)

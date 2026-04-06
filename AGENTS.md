@@ -12,7 +12,7 @@
 - `main.go`: application entrypoint, Echo wiring, middleware, API routes, SPA fallback.
 - `internal/config`: config loading via Viper and default settings.
 - `internal/db`: GORM + SQLite initialization.
-- `internal/handlers`: HTTP handlers for auth, diary CRUD, stats, and common endpoints.
+- `internal/handlers`: HTTP handlers for auth, diary, goals, json_store, and common endpoints.
 - `internal/middleware`: session-based auth middleware.
 - `internal/models`: GORM models and JSON field definitions.
 - `pkg/embed.go`: embeds `pkg/dist` into the Go binary.
@@ -157,7 +157,7 @@
 ## Architecture Notes
 
 - The Go server serves API routes under `/api` and static SPA content for everything else.
-- Auth is in-memory session state, not JWT or persistent sessions.
+- Auth uses signed session cookies (HMAC-SHA256); revocation records are persisted to SQLite.
 - CORS is currently limited to `http://localhost:5173` for development.
 - `pkg/embed.go` requires built frontend assets to exist before packaging the backend binary.
 
@@ -175,3 +175,28 @@
 - When adding new endpoints, mirror existing handler structure and JSON response style.
 - When adding frontend pages, follow the current route-based organization under `web/src/routes`.
 - If a change affects shipped UI, remember the build/embed chain: `web/dist` -> `pkg/dist` -> embedded binary.
+
+## Documentation Requirements
+
+### Docs Directory
+
+Detailed module documentation lives in `docs/`:
+- `docs/auth.md` - Authentication module
+- `docs/diary.md` - Diary module
+- `docs/goals.md` - Goals/check-in module
+- `docs/json-store.md` - JSON store module
+- `docs/config.md` - Configuration reference
+- `docs/deployment.md` - Deployment guide
+- `docs/development.md` - Development guide
+
+### Documentation Maintenance Rule
+
+**When modifying existing functionality or adding new features, you MUST check and update the corresponding documentation in `docs/`**.
+
+Specifically:
+- If you add/modify/delete an API endpoint, update the corresponding module doc
+- If you add/modify a data model or API response shape, update the relevant doc
+- If you change configuration options, update `docs/config.md`
+- If you add new functionality (handler, model, route), add or update the appropriate doc
+- Run `cd web && npm run check` for frontend changes and `go test ./...` for backend changes
+- Verify docs consistency with the actual implementation before marking the task complete

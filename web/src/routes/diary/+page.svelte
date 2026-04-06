@@ -3,17 +3,20 @@
 	import { goto } from '$app/navigation';
 	import { diaryAPI, type Diary, type DiaryStats } from '$lib/api';
 	import { auth } from '$lib/stores.svelte';
-	import { formatMonthLabel, formatWeekday, getCurrentMonthString, getMonthRange } from '$lib/date';
+	import { formatMonthLabel, formatWeekday, getCurrentMonthString, getMonthRange, shiftMonth, shiftYear } from '$lib/date';
 
 	let diaries = $state<Diary[]>([]);
 	let stats = $state<DiaryStats | null>(null);
 	let total = $state(0);
 	let page = $state(1);
-	let perPage = 50;
+	const perPage = 50;
 	let search = $state('');
 	let month = $state('');
+	let monthCursor = $state(getCurrentMonthString());
+	let draftContent = $state('');
 	let isLoading = $state(true);
-	let monthPicker = $state(getCurrentMonthString());
+	let isSaving = $state(false);
+	let saveError = $state('');
 
 	onMount(() => {
 		void initPage();
@@ -25,32 +28,27 @@
 			goto('/');
 			return;
 		}
-		loadData();
+		await loadData();
 	}
 
 	async function loadData() {
 		isLoading = true;
 		try {
-			let startDate = '';
-			let endDate = '';
 			const normalizedSearch = search.trim();
-
-			if (month) {
-				const range = getMonthRange(month);
-				startDate = range.startDate;
-				endDate = range.endDate;
-			}
+			const activeMonth = month || monthCursor;
+			const range = month ? getMonthRange(activeMonth) : null;
 
 			const [diariesResult, statsResult] = await Promise.all([
 				diaryAPI.list({
 					page,
 					per_page: perPage,
 					search: normalizedSearch,
-					start_date: startDate || undefined,
-					end_date: endDate || undefined
+					start_date: range?.startDate,
+					end_date: range?.endDate
 				}),
 				diaryAPI.stats()
 			]);
+
 			search = normalizedSearch;
 			diaries = diariesResult.diaries;
 			total = diariesResult.total;
@@ -64,31 +62,56 @@
 		}
 	}
 
+	async function handleCreateDiary() {
+		const content = draftContent.trim();
+		if (!content) {
+			saveError = '请输入日记内容';
+			return;
+		}
+
+		isSaving = true;
+		saveError = '';
+
+		try {
+			await diaryAPI.create({ content });
+			draftContent = '';
+			page = 1;
+			await loadData();
+		} catch (err) {
+			saveError = err instanceof Error ? err.message : '保存失败';
+		} finally {
+			isSaving = false;
+		}
+	}
+
 	function handleSearch() {
 		page = 1;
-		loadData();
+		month = monthCursor;
+		void loadData();
 	}
 
 	function clearFilters() {
 		search = '';
 		month = '';
-		monthPicker = getCurrentMonthString();
+		monthCursor = getCurrentMonthString();
 		page = 1;
-		loadData();
+		void loadData();
 	}
 
-	function applyMonthSelection(nextMonth: string) {
+	function shiftCursor(deltaMonths: number) {
+		const nextMonth = shiftMonth(monthCursor, deltaMonths);
+		monthCursor = nextMonth;
+		page = 1;
 		month = nextMonth;
-		monthPicker = nextMonth;
-		page = 1;
-		loadData();
+		void loadData();
 	}
 
-	function clearMonthSelection() {
-		month = '';
-		monthPicker = getCurrentMonthString();
+	function shiftCursorYear(deltaYears: number) {
+		const nextMonth = shiftYear(monthCursor, deltaYears);
+		monthCursor = nextMonth;
 		page = 1;
-		loadData();
+		month = nextMonth;
+		void loadData();
 	}
 
 	function getFrequencyPercent() {
@@ -100,7 +123,8 @@
 		return Math.max(1, Math.ceil(total / perPage));
 	}
 
-	const pickerMonthLabel = $derived(formatMonthLabel(monthPicker));
+	const monthLabel = $derived(formatMonthLabel(monthCursor));
+	const activeMonthLabel = $derived(month ? formatMonthLabel(month) : '全部月份');
 </script>
 
 <div class="diary-page">
@@ -113,7 +137,7 @@
 			<div>
 				<p class="overview-kicker">Diary Archive</p>
 				<h1>日记</h1>
-				<p class="overview-text">按关键词和月份回看过去的记录，让长文本也能保持安静、顺手、可检索。</p>
+				<p class="overview-text">写一小段信，马上入库。回看时按关键词和年月切换，不跳页，不打断，不截断内容。</p>
 			</div>
 			<div class="overview-stats">
 				<div>
@@ -146,9 +170,44 @@
 			</article>
 		</section>
 
+		<section class="composer-card card">
+			<div class="composer-head">
+				<div>
+					<p class="composer-kicker">Write</p>
+					<h2>写一封今天的短信</h2>
+					<p class="composer-subtext">不用选日期，系统会自动接在上一条日记之后。</p>
+				</div>
+				<button type="button" class="btn variant-filled-primary" onclick={handleCreateDiary} disabled={isSaving}>
+					{isSaving ? '提交中...' : '确认提交'}
+				</button>
+			</div>
+
+			{#if saveError}
+				<div class="alert variant-soft-error">
+					<p>{saveError}</p>
+				</div>
+			{/if}
+
+			<textarea
+				bind:value={draftContent}
+				class="composer-textarea"
+				maxlength="300"
+				placeholder="一般不会超过 300 字，想到什么就写什么。"
+				onkeydown={(e) => {
+					if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && !isSaving) {
+						void handleCreateDiary();
+					}
+				}}
+			></textarea>
+			<div class="composer-foot">
+				<span>当前 {draftContent.trim().length} / 300 字</span>
+				<span>快捷键：Ctrl/Cmd + Enter</span>
+			</div>
+		</section>
+
 		<section class="filter-card card">
-			<div class="filter-fields">
-				<label class="filter-field filter-search">
+			<div class="filter-bar">
+				<label class="filter-search-field">
 					<span>搜索</span>
 					<input
 						type="text"
@@ -157,39 +216,25 @@
 						onkeydown={(e) => e.key === 'Enter' && handleSearch()}
 					/>
 				</label>
-				<label class="filter-field filter-month">
-					<span>月份回看</span>
-					<div class="month-filter-shell">
-						<div class="month-filter-head month-filter-head-compact">
-							<div>
-								<strong>{pickerMonthLabel}</strong>
-								<small>{month ? `当前筛选：${formatMonthLabel(month)}` : '选择一个月份快速回看'}</small>
-							</div>
-						</div>
 
-						<div class="month-picker-row">
-							<input
-								class="month-input"
-								type="month"
-								bind:value={monthPicker}
-								max={getCurrentMonthString()}
-							/>
-							<button type="button" class="btn variant-soft-surface" onclick={() => applyMonthSelection(monthPicker)}>
-								按月份查询
-							</button>
-						</div>
+				<div class="month-strip" aria-label="月份回看">
+					<span class="month-strip-label">月份回看</span>
+					<button type="button" class="btn btn-sm variant-soft-surface" onclick={() => shiftCursorYear(-1)}>«</button>
+					<button type="button" class="btn btn-sm variant-soft-surface" onclick={() => shiftCursor(-1)}>‹</button>
+					<div class="month-chip">
+						<strong>{monthLabel}</strong>
+						<small>{activeMonthLabel}</small>
 					</div>
-				</label>
-			</div>
-			<div class="filter-actions">
-				<button type="button" onclick={handleSearch} class="btn variant-filled-primary">检索</button>
-				{#if search || month}
-					<button type="button" onclick={clearFilters} class="btn variant-soft-surface">清除全部</button>
-				{/if}
-				{#if month}
-					<button type="button" onclick={clearMonthSelection} class="btn variant-soft-surface">仅清除月份</button>
-				{/if}
-				<a href="/diary/new" class="btn btn-compose">写新日记</a>
+					<button type="button" class="btn btn-sm variant-soft-surface" onclick={() => shiftCursor(1)}>›</button>
+					<button type="button" class="btn btn-sm variant-soft-surface" onclick={() => shiftCursorYear(1)}>»</button>
+				</div>
+
+				<div class="filter-actions">
+					<button type="button" onclick={handleSearch} class="btn variant-filled-primary">查询</button>
+					{#if search || month}
+						<button type="button" onclick={clearFilters} class="btn variant-soft-surface">清除</button>
+					{/if}
+				</div>
 			</div>
 		</section>
 
@@ -220,10 +265,7 @@
 
 			{#if diaries.length === 0}
 				<div class="empty-state">
-					<p>{search || month ? '没有符合条件的日记。' : '还没有日记。'}</p>
-					{#if !search && !month}
-						<a href="/diary/new" class="btn variant-filled-primary">写第一篇日记</a>
-					{/if}
+					<p>{search || month ? '没有符合条件的日记。' : '还没有日记。先写下第一条吧。'}</p>
 				</div>
 			{:else}
 				<div class="diary-list">
@@ -237,7 +279,6 @@
 								<p class="diary-content">{diary.content}</p>
 								<div class="diary-row-foot">
 									<span class="diary-length">约 {diary.content.length} 字</span>
-									<a class="diary-edit-link" href={`/diary/${diary.id}`}>编辑</a>
 								</div>
 							</div>
 						</article>
@@ -251,7 +292,7 @@
 							disabled={page === 1}
 							onclick={() => {
 								page -= 1;
-								loadData();
+								void loadData();
 							}}
 						>
 							上一页
@@ -262,7 +303,7 @@
 							disabled={page >= getPageCount()}
 							onclick={() => {
 								page += 1;
-								loadData();
+								void loadData();
 							}}
 						>
 							下一页
@@ -300,7 +341,9 @@
 		box-shadow: 0 20px 40px rgba(53, 39, 27, 0.08);
 	}
 
-	.overview-kicker {
+	.overview-kicker,
+	.composer-kicker,
+	.list-kicker {
 		margin: 0 0 10px;
 		font-size: 12px;
 		letter-spacing: 0.16em;
@@ -308,15 +351,28 @@
 		color: var(--color-muted);
 	}
 
-	.overview-card h1 {
+	.overview-card h1,
+	.composer-head h2,
+	.list-card-head h2 {
 		margin: 0;
 		font-family: var(--font-family-display);
-		font-size: 42px;
 		font-weight: 600;
 	}
 
-	.overview-text {
-		max-width: 38rem;
+	.overview-card h1 {
+		font-size: 42px;
+	}
+
+	.composer-head h2 {
+		font-size: 30px;
+	}
+
+	.list-card-head h2 {
+		font-size: 28px;
+	}
+
+	.overview-text,
+	.composer-subtext {
 		margin: 12px 0 0;
 		color: var(--color-ink-soft);
 		line-height: 1.8;
@@ -337,7 +393,10 @@
 	}
 
 	.overview-stats span,
-	.summary-item p {
+	.summary-item p,
+	.composer-foot,
+	.month-strip-label,
+	.month-chip small {
 		display: block;
 		margin: 0;
 		font-size: 13px;
@@ -363,110 +422,111 @@
 		background: linear-gradient(180deg, rgba(255, 252, 247, 0.98) 0%, rgba(247, 241, 232, 0.9) 100%);
 	}
 
+	.composer-card,
 	.filter-card {
-		display: flex;
-		justify-content: space-between;
-		gap: 20px;
 		padding: 22px;
-		position: sticky;
-		top: 16px;
-		z-index: 1;
-		backdrop-filter: blur(10px);
-		background: rgba(255, 251, 246, 0.92);
+		background: rgba(255, 251, 246, 0.94);
 		box-shadow: 0 16px 34px rgba(53, 39, 27, 0.07);
 	}
 
-	.filter-fields {
+	.composer-card {
 		display: grid;
-		grid-template-columns: minmax(0, 1fr) minmax(340px, 420px);
 		gap: 14px;
-		flex: 1;
 	}
 
-	.filter-field {
+	.composer-head {
+		display: flex;
+		justify-content: space-between;
+		align-items: flex-start;
+		gap: 16px;
+	}
+
+	.composer-textarea {
+		width: 100%;
+		min-height: 152px;
+		resize: vertical;
+		padding: 16px 18px;
+		border: 1px solid var(--color-border);
+		border-radius: 20px;
+		background: rgba(255, 255, 255, 0.86);
+		outline: none;
+		font-family: var(--font-family-base);
+		line-height: 1.9;
+		font-size: 1rem;
+		color: var(--color-ink);
+	}
+
+	.composer-textarea:focus,
+	.filter-search-field input:focus {
+		border-color: rgba(140, 90, 60, 0.45);
+		box-shadow: 0 0 0 4px rgba(140, 90, 60, 0.08);
+	}
+
+	.composer-foot {
+		display: flex;
+		justify-content: space-between;
+		gap: 12px;
+		flex-wrap: wrap;
+	}
+
+	.filter-bar {
+		display: grid;
+		grid-template-columns: minmax(0, 1.2fr) auto auto;
+		gap: 16px;
+		align-items: end;
+	}
+
+	.filter-search-field {
 		display: grid;
 		gap: 8px;
 	}
 
-	.filter-field span {
+	.filter-search-field span {
 		font-size: 13px;
 		color: var(--color-muted);
 	}
 
-	.month-filter-shell {
+	.filter-search-field input {
+		min-height: 46px;
+		padding: 0 14px;
+		border: 1px solid var(--color-border);
+		border-radius: 14px;
+		background: rgba(255, 255, 255, 0.82);
+	}
+
+	.month-strip {
 		display: grid;
-		gap: 12px;
-		padding: 14px;
+		grid-auto-flow: column;
+		grid-auto-columns: max-content;
+		gap: 10px;
+		align-items: center;
+		padding: 10px 12px;
 		border: 1px solid var(--color-border);
 		border-radius: 18px;
 		background: linear-gradient(180deg, rgba(255, 252, 247, 0.96) 0%, rgba(248, 241, 232, 0.92) 100%);
 	}
 
-	.month-filter-head {
-		display: flex;
-		justify-content: space-between;
-		gap: 12px;
-		align-items: flex-start;
+	.month-strip-label {
+		margin-right: 4px;
 	}
 
-	.month-filter-head strong {
+	.month-chip {
+		min-width: 124px;
+		padding: 0 4px;
+		text-align: center;
+	}
+
+	.month-chip strong {
 		display: block;
 		font-size: 1rem;
 		font-weight: 700;
 	}
 
-	.month-filter-head-compact {
-		align-items: center;
-	}
-
-	.month-filter-head small {
-		display: block;
-		margin-top: 4px;
-		color: var(--color-muted);
-	}
-
-	.month-picker-row {
-		display: flex;
-		align-items: center;
-		gap: 10px;
-		flex-wrap: wrap;
-	}
-
-	.month-input {
-		min-height: 46px;
-		padding: 0 14px;
-		border: 1px solid var(--color-border);
-		border-radius: 14px;
-		background: rgba(255, 255, 255, 0.82);
-		font: inherit;
-		color: var(--color-ink);
-	}
-
-	.filter-field input {
-		min-height: 46px;
-		padding: 0 14px;
-		border: 1px solid var(--color-border);
-		border-radius: 14px;
-		background: rgba(255, 255, 255, 0.82);
-	}
-
-	.filter-field input:focus {
-		outline: none;
-		border-color: rgba(140, 90, 60, 0.45);
-		box-shadow: 0 0 0 4px rgba(140, 90, 60, 0.08);
-	}
-
 	.filter-actions {
 		display: flex;
-		align-items: end;
+		align-items: center;
 		gap: 10px;
 		flex-wrap: wrap;
-	}
-
-	.btn-compose {
-		background: var(--color-panel-muted);
-		border-color: var(--color-border);
-		color: var(--color-ink);
 	}
 
 	.active-filters {
@@ -485,21 +545,6 @@
 		gap: 16px;
 		padding: 24px 28px 18px;
 		border-bottom: 1px solid rgba(113, 91, 70, 0.08);
-	}
-
-	.list-kicker {
-		margin: 0 0 8px;
-		font-size: 12px;
-		letter-spacing: 0.16em;
-		text-transform: uppercase;
-		color: var(--color-muted);
-	}
-
-	.list-card-head h2 {
-		margin: 0;
-		font-family: var(--font-family-display);
-		font-size: 28px;
-		font-weight: 600;
 	}
 
 	.list-card-meta {
@@ -542,13 +587,6 @@
 		border-radius: 22px;
 		background: rgba(255, 252, 247, 0.74);
 		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
-		transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
-	}
-
-	.diary-row:hover {
-		transform: translateY(-1px);
-		border-color: rgba(140, 90, 60, 0.22);
-		box-shadow: 0 14px 28px rgba(53, 39, 27, 0.07);
 	}
 
 	.diary-row-meta {
@@ -590,35 +628,14 @@
 		line-height: 1.9;
 		white-space: pre-wrap;
 		word-break: break-word;
-		display: -webkit-box;
-		line-clamp: 4;
-		-webkit-line-clamp: 4;
-		-webkit-box-orient: vertical;
-		overflow: hidden;
 	}
 
 	.diary-row-foot {
 		display: flex;
 		align-items: center;
-		justify-content: space-between;
+		justify-content: flex-start;
 		gap: 12px;
 		flex-wrap: wrap;
-	}
-
-	.diary-edit-link {
-		width: fit-content;
-		padding: 0.35rem 0.75rem;
-		border: 1px solid rgba(140, 90, 60, 0.16);
-		border-radius: 999px;
-		background: rgba(255, 248, 240, 0.86);
-		text-decoration: none;
-		font-size: 14px;
-		font-weight: 600;
-		color: var(--color-ink);
-	}
-
-	.diary-edit-link:hover {
-		background: rgba(244, 234, 221, 0.96);
 	}
 
 	.empty-state {
@@ -627,7 +644,7 @@
 	}
 
 	.empty-state p {
-		margin: 0 0 16px;
+		margin: 0;
 		color: var(--color-muted);
 	}
 
@@ -644,29 +661,31 @@
 		color: var(--color-muted);
 	}
 
-	@media (max-width: 900px) {
+	@media (max-width: 960px) {
 		.summary-grid {
 			grid-template-columns: repeat(2, minmax(0, 1fr));
 		}
 
-		.filter-card,
+		.filter-bar {
+			grid-template-columns: 1fr;
+		}
+
+		.month-strip {
+			justify-content: start;
+			overflow-x: auto;
+		}
+	}
+
+	@media (max-width: 900px) {
 		.overview-card,
+		.composer-head,
 		.list-card-head,
 		.diary-row {
-			grid-template-columns: 1fr;
 			flex-direction: column;
 		}
 
-		.filter-fields {
+		.diary-row {
 			grid-template-columns: 1fr;
-		}
-
-		.filter-actions {
-			align-items: stretch;
-		}
-
-		.filter-card {
-			position: static;
 		}
 	}
 
@@ -678,6 +697,7 @@
 
 		.overview-card,
 		.summary-item,
+		.composer-card,
 		.filter-card,
 		.list-card-head,
 		.diary-row {
@@ -698,9 +718,10 @@
 			grid-template-columns: 1fr;
 		}
 
+		.composer-head,
 		.active-filters,
 		.list-card-meta,
-		.diary-row-foot,
+		.composer-foot,
 		.pagination {
 			flex-direction: column;
 			align-items: stretch;
@@ -716,11 +737,6 @@
 
 		.diary-row-meta {
 			padding: 10px 12px;
-		}
-
-		.diary-content {
-			line-clamp: 5;
-			-webkit-line-clamp: 5;
 		}
 	}
 </style>

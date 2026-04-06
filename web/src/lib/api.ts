@@ -142,6 +142,28 @@ interface GoalYearSummary {
 	end_date: string;
 }
 
+interface JSONStoreItemMeta {
+	id: number;
+	key: string;
+	size_bytes: number;
+	expires_at: string;
+	created_at: string;
+	updated_at: string;
+	is_expired: boolean;
+}
+
+interface JSONStoreListResponse {
+	items: JSONStoreItemMeta[];
+	total: number;
+	total_size_bytes: number;
+	newest_key: string;
+	sort_order: 'asc' | 'desc';
+}
+
+interface JSONStoreContentResponse extends JSONStoreItemMeta {
+	content: string;
+}
+
 async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
 	const response = await fetch(`${API_BASE}${path}`, {
 		credentials: 'include',
@@ -157,7 +179,28 @@ async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
 		throw new Error(error.error || `HTTP ${response.status}`);
 	}
 
+	if (response.status === 204) {
+		return undefined as T;
+	}
+
 	return response.json();
+}
+
+async function fetchRawText(path: string, options?: RequestInit): Promise<string> {
+	const response = await fetch(`${API_BASE}${path}`, {
+		headers: {
+			'Content-Type': 'application/json',
+			...options?.headers
+		},
+		...options
+	});
+
+	if (!response.ok) {
+		const error = await response.json().catch(() => ({ error: '请求失败' }));
+		throw new Error(error.error || `HTTP ${response.status}`);
+	}
+
+	return response.text();
 }
 
 export const authAPI = {
@@ -204,21 +247,10 @@ export const diaryAPI = {
 	get: (id: number) =>
 		fetchAPI<Diary>(`/diary/${id}`),
 
-	create: (data: { content: string; create_date: string }) =>
+	create: (data: { content: string }) =>
 		fetchAPI<Diary>('/diary', {
 			method: 'POST',
 			body: JSON.stringify(data)
-		}),
-
-	update: (id: number, data: { content?: string; create_date?: string }) =>
-		fetchAPI<Diary>(`/diary/${id}`, {
-			method: 'PUT',
-			body: JSON.stringify(data)
-		}),
-
-	delete: (id: number) =>
-		fetchAPI<{ success: boolean }>(`/diary/${id}`, {
-			method: 'DELETE'
 		}),
 
 	stats: () =>
@@ -274,6 +306,54 @@ export const goalsAPI = {
 		})
 };
 
+export const publicJSONAPI = {
+	get: (key: string) => fetchRawText(`/json/${key}`),
+
+	create: (key: string, jsonText: string, ttlDays?: number) => {
+		const query = ttlDays ? `?ttl_days=${ttlDays}` : '';
+		return fetchAPI<{ key: string; size_bytes: number; expires_at: string; created_at: string; updated_at: string }>(`/json/${key}${query}`, {
+			method: 'POST',
+			body: jsonText
+		});
+	},
+
+	upsert: (key: string, jsonText: string, ttlDays?: number) => {
+		const query = ttlDays ? `?ttl_days=${ttlDays}` : '';
+		return fetchAPI<{ key: string; size_bytes: number; expires_at: string; created_at: string; updated_at: string }>(`/json/${key}${query}`, {
+			method: 'PUT',
+			body: jsonText
+		});
+	},
+
+	delete: (key: string) =>
+		fetch(`${API_BASE}/json/${key}`, {
+			method: 'DELETE'
+		}).then(async (response) => {
+			if (!response.ok) {
+				const error = await response.json().catch(() => ({ error: '请求失败' }));
+				throw new Error(error.error || `HTTP ${response.status}`);
+			}
+		})
+};
+
+export const adminJSONAPI = {
+	list: (params?: { page?: number; per_page?: number; search?: string; sort?: 'asc' | 'desc' }) => {
+		const query = new URLSearchParams();
+		if (params?.page) query.set('page', params.page.toString());
+		if (params?.per_page) query.set('per_page', params.per_page.toString());
+		if (params?.search?.trim()) query.set('search', params.search.trim());
+		if (params?.sort) query.set('sort', params.sort);
+		return fetchAPI<JSONStoreListResponse>(`/admin/json?${query}`);
+	},
+
+	getContent: (key: string) => fetchAPI<JSONStoreContentResponse>(`/admin/json/${key}/content`),
+
+	delete: (key: string) =>
+		fetchAPI<void>(`/admin/json/${key}`, {
+			method: 'DELETE'
+		})
+};
+
 export type {
 	Diary,
 	DiaryListResponse,
@@ -288,5 +368,8 @@ export type {
 	GoalCalendarDayDetail,
 	GoalPeriodDetail,
 	GoalYearSummary,
-	GoalRecordPayload
+	GoalRecordPayload,
+	JSONStoreItemMeta,
+	JSONStoreListResponse,
+	JSONStoreContentResponse
 };

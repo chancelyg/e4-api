@@ -89,7 +89,7 @@
 	{:else}
 		<div class="text-center py-12">
 			<p class="text-surface-500 mb-4">还没有日记数据</p>
-			<a href="/diary/new" class="btn variant-filled-primary">
+			<a href="/diary" class="btn variant-filled-primary">
 				写第一篇日记
 			</a>
 		</div>

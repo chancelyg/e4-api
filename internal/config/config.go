@@ -14,10 +14,11 @@ const defaultAdminPasswordHash = "$2a$10$4ZPgUj01QYUd/4feVvRWKebBpHeWiHJQyJABYlT
 const defaultDevAuthSecret = "your-secret-key-change-in-production"
 
 type Config struct {
-	Server   ServerConfig   `mapstructure:"server"`
-	Database DatabaseConfig `mapstructure:"database"`
-	Auth     AuthConfig     `mapstructure:"auth"`
-	Site     SiteConfig     `mapstructure:"site"`
+	Server    ServerConfig    `mapstructure:"server"`
+	Database  DatabaseConfig  `mapstructure:"database"`
+	Auth      AuthConfig      `mapstructure:"auth"`
+	Site      SiteConfig      `mapstructure:"site"`
+	JSONStore JSONStoreConfig `mapstructure:"json_store"`
 }
 
 type ServerConfig struct {
@@ -43,6 +44,19 @@ type SiteConfig struct {
 	Title string `mapstructure:"title"`
 }
 
+type JSONStoreConfig struct {
+	MaxSizeBytes           int64 `mapstructure:"max_size_bytes"`
+	DefaultTTLDays         int   `mapstructure:"default_ttl_days"`
+	MaxTTLDays             int   `mapstructure:"max_ttl_days"`
+	MinKeyLength           int   `mapstructure:"min_key_length"`
+	MaxKeyLength           int   `mapstructure:"max_key_length"`
+	MaxItems               int64 `mapstructure:"max_items"`
+	MaxTotalBytes          int64 `mapstructure:"max_total_bytes"`
+	ReadRateLimit          int   `mapstructure:"read_rate_limit"`
+	WriteRateLimit         int   `mapstructure:"write_rate_limit"`
+	RateLimitWindowSeconds int   `mapstructure:"rate_limit_window_seconds"`
+}
+
 var Cfg *Config
 
 var sources = map[string]string{}
@@ -65,6 +79,16 @@ var envBindings = []envBinding{
 	{key: "auth.rate_limit", env: "E4_AUTH_RATE_LIMIT"},
 	{key: "auth.lockout_minutes", env: "E4_AUTH_LOCKOUT_MINUTES"},
 	{key: "site.title", env: "E4_SITE_TITLE"},
+	{key: "json_store.max_size_bytes", env: "E4_JSON_STORE_MAX_SIZE_BYTES"},
+	{key: "json_store.default_ttl_days", env: "E4_JSON_STORE_DEFAULT_TTL_DAYS"},
+	{key: "json_store.max_ttl_days", env: "E4_JSON_STORE_MAX_TTL_DAYS"},
+	{key: "json_store.min_key_length", env: "E4_JSON_STORE_MIN_KEY_LENGTH"},
+	{key: "json_store.max_key_length", env: "E4_JSON_STORE_MAX_KEY_LENGTH"},
+	{key: "json_store.max_items", env: "E4_JSON_STORE_MAX_ITEMS"},
+	{key: "json_store.max_total_bytes", env: "E4_JSON_STORE_MAX_TOTAL_BYTES"},
+	{key: "json_store.read_rate_limit", env: "E4_JSON_STORE_READ_RATE_LIMIT"},
+	{key: "json_store.write_rate_limit", env: "E4_JSON_STORE_WRITE_RATE_LIMIT"},
+	{key: "json_store.rate_limit_window_seconds", env: "E4_JSON_STORE_RATE_LIMIT_WINDOW_SECONDS"},
 }
 
 func Load() error {
@@ -99,6 +123,16 @@ func Load() error {
 	v.SetDefault("auth.rate_limit", 5)
 	v.SetDefault("auth.lockout_minutes", 15)
 	v.SetDefault("site.title", "E4 Diary")
+	v.SetDefault("json_store.max_size_bytes", 512*1024)
+	v.SetDefault("json_store.default_ttl_days", 30)
+	v.SetDefault("json_store.max_ttl_days", 90)
+	v.SetDefault("json_store.min_key_length", 6)
+	v.SetDefault("json_store.max_key_length", 64)
+	v.SetDefault("json_store.max_items", 1000)
+	v.SetDefault("json_store.max_total_bytes", 128*1024*1024)
+	v.SetDefault("json_store.read_rate_limit", 120)
+	v.SetDefault("json_store.write_rate_limit", 30)
+	v.SetDefault("json_store.rate_limit_window_seconds", 60)
 
 	if err := v.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
@@ -112,17 +146,27 @@ func Load() error {
 	}
 
 	sources = map[string]string{
-		"server.host":          resolveSource(v, existingEnv, dotEnvEnv, "server.host", "E4_SERVER_HOST"),
-		"server.port":          resolveSource(v, existingEnv, dotEnvEnv, "server.port", "E4_SERVER_PORT"),
-		"server.mode":          resolveSource(v, existingEnv, dotEnvEnv, "server.mode", "E4_SERVER_MODE"),
-		"database.dsn":         resolveSource(v, existingEnv, dotEnvEnv, "database.dsn", "E4_DATABASE_DSN"),
-		"auth.username":        resolveSource(v, existingEnv, dotEnvEnv, "auth.username", "E4_AUTH_USERNAME"),
-		"auth.password":        resolveSource(v, existingEnv, dotEnvEnv, "auth.password", "E4_AUTH_PASSWORD"),
-		"auth.secret":          resolveSource(v, existingEnv, dotEnvEnv, "auth.secret", "E4_AUTH_SECRET"),
-		"auth.totp_secret":     resolveSource(v, existingEnv, dotEnvEnv, "auth.totp_secret", "E4_AUTH_TOTP_SECRET"),
-		"auth.rate_limit":      resolveSource(v, existingEnv, dotEnvEnv, "auth.rate_limit", "E4_AUTH_RATE_LIMIT"),
-		"auth.lockout_minutes": resolveSource(v, existingEnv, dotEnvEnv, "auth.lockout_minutes", "E4_AUTH_LOCKOUT_MINUTES"),
-		"site.title":           resolveSource(v, existingEnv, dotEnvEnv, "site.title", "E4_SITE_TITLE"),
+		"server.host":                          resolveSource(v, existingEnv, dotEnvEnv, "server.host", "E4_SERVER_HOST"),
+		"server.port":                          resolveSource(v, existingEnv, dotEnvEnv, "server.port", "E4_SERVER_PORT"),
+		"server.mode":                          resolveSource(v, existingEnv, dotEnvEnv, "server.mode", "E4_SERVER_MODE"),
+		"database.dsn":                         resolveSource(v, existingEnv, dotEnvEnv, "database.dsn", "E4_DATABASE_DSN"),
+		"auth.username":                        resolveSource(v, existingEnv, dotEnvEnv, "auth.username", "E4_AUTH_USERNAME"),
+		"auth.password":                        resolveSource(v, existingEnv, dotEnvEnv, "auth.password", "E4_AUTH_PASSWORD"),
+		"auth.secret":                          resolveSource(v, existingEnv, dotEnvEnv, "auth.secret", "E4_AUTH_SECRET"),
+		"auth.totp_secret":                     resolveSource(v, existingEnv, dotEnvEnv, "auth.totp_secret", "E4_AUTH_TOTP_SECRET"),
+		"auth.rate_limit":                      resolveSource(v, existingEnv, dotEnvEnv, "auth.rate_limit", "E4_AUTH_RATE_LIMIT"),
+		"auth.lockout_minutes":                 resolveSource(v, existingEnv, dotEnvEnv, "auth.lockout_minutes", "E4_AUTH_LOCKOUT_MINUTES"),
+		"site.title":                           resolveSource(v, existingEnv, dotEnvEnv, "site.title", "E4_SITE_TITLE"),
+		"json_store.max_size_bytes":            resolveSource(v, existingEnv, dotEnvEnv, "json_store.max_size_bytes", "E4_JSON_STORE_MAX_SIZE_BYTES"),
+		"json_store.default_ttl_days":          resolveSource(v, existingEnv, dotEnvEnv, "json_store.default_ttl_days", "E4_JSON_STORE_DEFAULT_TTL_DAYS"),
+		"json_store.max_ttl_days":              resolveSource(v, existingEnv, dotEnvEnv, "json_store.max_ttl_days", "E4_JSON_STORE_MAX_TTL_DAYS"),
+		"json_store.min_key_length":            resolveSource(v, existingEnv, dotEnvEnv, "json_store.min_key_length", "E4_JSON_STORE_MIN_KEY_LENGTH"),
+		"json_store.max_key_length":            resolveSource(v, existingEnv, dotEnvEnv, "json_store.max_key_length", "E4_JSON_STORE_MAX_KEY_LENGTH"),
+		"json_store.max_items":                 resolveSource(v, existingEnv, dotEnvEnv, "json_store.max_items", "E4_JSON_STORE_MAX_ITEMS"),
+		"json_store.max_total_bytes":           resolveSource(v, existingEnv, dotEnvEnv, "json_store.max_total_bytes", "E4_JSON_STORE_MAX_TOTAL_BYTES"),
+		"json_store.read_rate_limit":           resolveSource(v, existingEnv, dotEnvEnv, "json_store.read_rate_limit", "E4_JSON_STORE_READ_RATE_LIMIT"),
+		"json_store.write_rate_limit":          resolveSource(v, existingEnv, dotEnvEnv, "json_store.write_rate_limit", "E4_JSON_STORE_WRITE_RATE_LIMIT"),
+		"json_store.rate_limit_window_seconds": resolveSource(v, existingEnv, dotEnvEnv, "json_store.rate_limit_window_seconds", "E4_JSON_STORE_RATE_LIMIT_WINDOW_SECONDS"),
 	}
 
 	Cfg.Server.Host = strings.TrimSpace(Cfg.Server.Host)
@@ -132,6 +176,40 @@ func Load() error {
 	Cfg.Auth.Secret = strings.TrimSpace(Cfg.Auth.Secret)
 	Cfg.Auth.TOTPSecret = strings.TrimSpace(Cfg.Auth.TOTPSecret)
 	Cfg.Site.Title = strings.TrimSpace(Cfg.Site.Title)
+
+	if Cfg.JSONStore.MaxSizeBytes <= 0 {
+		Cfg.JSONStore.MaxSizeBytes = 512 * 1024
+	}
+	if Cfg.JSONStore.DefaultTTLDays <= 0 {
+		Cfg.JSONStore.DefaultTTLDays = 30
+	}
+	if Cfg.JSONStore.MaxTTLDays <= 0 {
+		Cfg.JSONStore.MaxTTLDays = 90
+	}
+	if Cfg.JSONStore.DefaultTTLDays > Cfg.JSONStore.MaxTTLDays {
+		Cfg.JSONStore.DefaultTTLDays = Cfg.JSONStore.MaxTTLDays
+	}
+	if Cfg.JSONStore.MinKeyLength <= 0 {
+		Cfg.JSONStore.MinKeyLength = 6
+	}
+	if Cfg.JSONStore.MaxKeyLength < Cfg.JSONStore.MinKeyLength {
+		Cfg.JSONStore.MaxKeyLength = 64
+	}
+	if Cfg.JSONStore.MaxItems <= 0 {
+		Cfg.JSONStore.MaxItems = 1000
+	}
+	if Cfg.JSONStore.MaxTotalBytes <= 0 {
+		Cfg.JSONStore.MaxTotalBytes = 128 * 1024 * 1024
+	}
+	if Cfg.JSONStore.ReadRateLimit <= 0 {
+		Cfg.JSONStore.ReadRateLimit = 120
+	}
+	if Cfg.JSONStore.WriteRateLimit <= 0 {
+		Cfg.JSONStore.WriteRateLimit = 30
+	}
+	if Cfg.JSONStore.RateLimitWindowSeconds <= 0 {
+		Cfg.JSONStore.RateLimitWindowSeconds = 60
+	}
 
 	if strings.EqualFold(Cfg.Server.Mode, "release") {
 		if Cfg.Auth.Username == "" {

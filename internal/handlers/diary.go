@@ -17,13 +17,7 @@ import (
 type DiaryHandler struct{}
 
 type CreateDiaryRequest struct {
-	Content    string `json:"content" validate:"required"`
-	CreateDate string `json:"create_date" validate:"required"`
-}
-
-type UpdateDiaryRequest struct {
-	Content    *string `json:"content"`
-	CreateDate *string `json:"create_date"`
+	Content string `json:"content" validate:"required"`
 }
 
 type DiaryListResponse struct {
@@ -138,16 +132,16 @@ func (h *DiaryHandler) Create(c echo.Context) error {
 		})
 	}
 
-	// Validate date format
-	if _, err := time.Parse("2006-01-02", req.CreateDate); err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]string{
-			"error": "日期格式无效，应为 YYYY-MM-DD",
+	createDate, err := nextDiaryCreateDate()
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "创建日记失败",
 		})
 	}
 
 	diary := models.Diary{
 		Content:    req.Content,
-		CreateDate: req.CreateDate,
+		CreateDate: createDate,
 	}
 
 	if result := db.DB.Create(&diary); result.Error != nil {
@@ -157,86 +151,6 @@ func (h *DiaryHandler) Create(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusCreated, diary)
-}
-
-func (h *DiaryHandler) Update(c echo.Context) error {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]string{
-			"error": "无效的日记 ID",
-		})
-	}
-
-	req := new(UpdateDiaryRequest)
-	if err := c.Bind(req); err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]string{
-			"error": "无效的请求数据",
-		})
-	}
-
-	var diary models.Diary
-	if result := db.DB.First(&diary, id); result.Error != nil {
-		if result.Error == gorm.ErrRecordNotFound {
-			return c.JSON(http.StatusNotFound, map[string]string{
-				"error": "日记不存在",
-			})
-		}
-		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "获取日记失败",
-		})
-	}
-
-	// Update fields
-	if req.Content != nil {
-		content := strings.TrimSpace(*req.Content)
-		if content == "" {
-			return c.JSON(http.StatusBadRequest, map[string]string{
-				"error": "日记内容不能为空",
-			})
-		}
-		diary.Content = content
-	}
-	if req.CreateDate != nil {
-		if _, err := time.Parse("2006-01-02", *req.CreateDate); err != nil {
-			return c.JSON(http.StatusBadRequest, map[string]string{
-				"error": "日期格式无效，应为 YYYY-MM-DD",
-			})
-		}
-		diary.CreateDate = *req.CreateDate
-	}
-
-	if result := db.DB.Save(&diary); result.Error != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "更新日记失败",
-		})
-	}
-
-	return c.JSON(http.StatusOK, diary)
-}
-
-func (h *DiaryHandler) Delete(c echo.Context) error {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]string{
-			"error": "无效的日记 ID",
-		})
-	}
-
-	result := db.DB.Delete(&models.Diary{}, id)
-	if result.Error != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "删除日记失败",
-		})
-	}
-	if result.RowsAffected == 0 {
-		return c.JSON(http.StatusNotFound, map[string]string{
-			"error": "日记不存在",
-		})
-	}
-
-	return c.JSON(http.StatusOK, map[string]bool{
-		"success": true,
-	})
 }
 
 func (h *DiaryHandler) Stats(c echo.Context) error {
@@ -356,4 +270,22 @@ func buildFuzzyLikePattern(value string) string {
 		builder.WriteByte('%')
 	}
 	return builder.String()
+}
+
+func nextDiaryCreateDate() (string, error) {
+	var latestDiary models.Diary
+	result := db.DB.Order("create_date DESC, id DESC").Limit(1).First(&latestDiary)
+	if result.Error != nil {
+		if result.Error == gorm.ErrRecordNotFound {
+			return time.Now().Format("2006-01-02"), nil
+		}
+		return "", result.Error
+	}
+
+	latestDate, err := time.Parse("2006-01-02", latestDiary.CreateDate)
+	if err != nil {
+		return "", err
+	}
+
+	return latestDate.AddDate(0, 0, 1).Format("2006-01-02"), nil
 }

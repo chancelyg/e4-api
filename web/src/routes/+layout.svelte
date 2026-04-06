@@ -17,6 +17,7 @@
 
 	const isDiarySection = $derived(page.url.pathname.startsWith('/diary'));
 	const isGoalsSection = $derived(page.url.pathname.startsWith('/goals'));
+	const isJSONSection = $derived(page.url.pathname.startsWith('/json'));
 </script>
 
 <div class="app-shell">
@@ -31,6 +32,7 @@
 			<nav class="sidebar-nav">
 				<a href="/diary" class:sidebar-link-active={isDiarySection} class="sidebar-link">日记</a>
 				<a href="/goals" class:sidebar-link-active={isGoalsSection} class="sidebar-link sidebar-link-secondary">目标</a>
+				<a href="/json" class:sidebar-link-active={isJSONSection} class="sidebar-link sidebar-link-secondary">JSON</a>
 			</nav>
 
 			<div class="sidebar-footer">
@@ -232,7 +234,7 @@
 
 		.sidebar-nav {
 			display: grid;
-			grid-template-columns: repeat(2, minmax(0, 1fr));
+			grid-template-columns: repeat(3, minmax(0, 1fr));
 			gap: 10px;
 		}
 

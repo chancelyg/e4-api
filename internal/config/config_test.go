@@ -120,3 +120,42 @@ func TestLoadPrefersExplicitEnvironmentOverDotEnv(t *testing.T) {
 	assert.Equal(t, "explicit-secret", Cfg.Auth.Secret)
 	assert.Equal(t, "env", Source("auth.secret"))
 }
+
+func TestLoadSetsJSONStoreDefaults(t *testing.T) {
+	unsetEnvForTest(t, "E4_JSON_STORE_MAX_SIZE_BYTES")
+	unsetEnvForTest(t, "E4_JSON_STORE_DEFAULT_TTL_DAYS")
+	unsetEnvForTest(t, "E4_JSON_STORE_MAX_TTL_DAYS")
+	unsetEnvForTest(t, "E4_JSON_STORE_MIN_KEY_LENGTH")
+	unsetEnvForTest(t, "E4_JSON_STORE_MAX_KEY_LENGTH")
+	unsetEnvForTest(t, "E4_JSON_STORE_MAX_ITEMS")
+	unsetEnvForTest(t, "E4_JSON_STORE_MAX_TOTAL_BYTES")
+	unsetEnvForTest(t, "E4_JSON_STORE_READ_RATE_LIMIT")
+	unsetEnvForTest(t, "E4_JSON_STORE_WRITE_RATE_LIMIT")
+	unsetEnvForTest(t, "E4_JSON_STORE_RATE_LIMIT_WINDOW_SECONDS")
+
+	workdir := t.TempDir()
+	configContent := "auth:\n  password: \"$2a$10$5OUxfHLfhWa1sYDlpuarQevoiPznWTmM1OZjLS.vtlbj7zsW6gMvG\"\n"
+	require.NoError(t, os.WriteFile(filepath.Join(workdir, "config.yaml"), []byte(configContent), 0o644))
+
+	previousWD, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(workdir))
+	t.Cleanup(func() {
+		_ = os.Chdir(previousWD)
+		Cfg = nil
+		sources = map[string]string{}
+	})
+
+	require.NoError(t, Load())
+	assert.Equal(t, int64(512*1024), Cfg.JSONStore.MaxSizeBytes)
+	assert.Equal(t, 30, Cfg.JSONStore.DefaultTTLDays)
+	assert.Equal(t, 90, Cfg.JSONStore.MaxTTLDays)
+	assert.Equal(t, 6, Cfg.JSONStore.MinKeyLength)
+	assert.Equal(t, 64, Cfg.JSONStore.MaxKeyLength)
+	assert.Equal(t, int64(1000), Cfg.JSONStore.MaxItems)
+	assert.Equal(t, int64(128*1024*1024), Cfg.JSONStore.MaxTotalBytes)
+	assert.Equal(t, 120, Cfg.JSONStore.ReadRateLimit)
+	assert.Equal(t, 30, Cfg.JSONStore.WriteRateLimit)
+	assert.Equal(t, 60, Cfg.JSONStore.RateLimitWindowSeconds)
+	assert.Equal(t, "default", Source("json_store.default_ttl_days"))
+}

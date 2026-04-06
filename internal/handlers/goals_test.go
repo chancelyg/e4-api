@@ -151,14 +151,29 @@ func TestGoalDashboardBuildsAggregates(t *testing.T) {
 	if thisWeekDate.Before(monthStart) {
 		thisWeekDate = anchor
 	}
-	seedGoalRecords(t, []models.GoalRecord{
-		{GoalID: 1, RecordDate: yesterday.Format(goalDateLayout), IsCompleted: true},
-		{GoalID: 1, RecordDate: thisWeekDate.Format(goalDateLayout), IsCompleted: true},
-		{GoalID: 1, RecordDate: monthStart.Format(goalDateLayout), IsCompleted: true},
-		{GoalID: 2, RecordDate: yesterday.Format(goalDateLayout), IsCompleted: true, Quantity: floatPtr(5)},
-		{GoalID: 2, RecordDate: monthStart.Format(goalDateLayout), IsCompleted: true, Quantity: floatPtr(3)},
-		{GoalID: 3, RecordDate: yesterday.Format(goalDateLayout), IsCompleted: true},
-	})
+	goalOneDates := []time.Time{yesterday}
+	if !sameDay(thisWeekDate, yesterday) {
+		goalOneDates = append(goalOneDates, thisWeekDate)
+	}
+	if !sameDay(monthStart, yesterday) && !sameDay(monthStart, thisWeekDate) {
+		goalOneDates = append(goalOneDates, monthStart)
+	}
+
+	runSecondDate := monthStart
+	if sameDay(runSecondDate, yesterday) {
+		runSecondDate = anchor
+	}
+
+	records := make([]models.GoalRecord, 0, len(goalOneDates)+3)
+	for _, date := range goalOneDates {
+		records = append(records, models.GoalRecord{GoalID: 1, RecordDate: date.Format(goalDateLayout), IsCompleted: true})
+	}
+	records = append(records,
+		models.GoalRecord{GoalID: 2, RecordDate: yesterday.Format(goalDateLayout), IsCompleted: true, Quantity: floatPtr(5)},
+		models.GoalRecord{GoalID: 2, RecordDate: runSecondDate.Format(goalDateLayout), IsCompleted: true, Quantity: floatPtr(3)},
+		models.GoalRecord{GoalID: 3, RecordDate: yesterday.Format(goalDateLayout), IsCompleted: true},
+	)
+	seedGoalRecords(t, records)
 
 	url := fmt.Sprintf("/api/goals/dashboard?range=month&date=%s&checkin_date=%s&month=%s", anchor.Format(goalDateLayout), yesterday.Format(goalDateLayout), anchor.Format("2006-01"))
 	req := httptest.NewRequest(http.MethodGet, url, nil)
@@ -175,7 +190,7 @@ func TestGoalDashboardBuildsAggregates(t *testing.T) {
 	assert.Equal(t, yesterday.Format(goalDateLayout), response.CheckinDate)
 	assert.NotEmpty(t, response.CalendarDays)
 	assert.GreaterOrEqual(t, response.TodayCompletedCount, 0)
-	assert.Equal(t, 6, response.AnnualCheckinTotal)
+	assert.Equal(t, len(records), response.AnnualCheckinTotal)
 	assert.NotNil(t, response.WeekDetails)
 	assert.NotEmpty(t, response.MonthDetails)
 

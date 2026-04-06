@@ -30,6 +30,7 @@ web/node_modules/
 
 # Local generated artifacts
 /out/
+/.playwright-mcp/
 
 # OS files
 .DS_Store

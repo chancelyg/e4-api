@@ -62,6 +62,10 @@ export function shiftMonth(monthStr: string, delta: number): string {
 	return `${next.getFullYear()}-${pad2(next.getMonth() + 1)}`;
 }
 
+export function shiftYear(monthStr: string, delta: number): string {
+	return shiftMonth(monthStr, delta * 12);
+}
+
 export function getMonthCalendarDays(monthStr: string): Array<{ date: string; day: number; inMonth: boolean }> {
 	if (!monthStr) return [];
 

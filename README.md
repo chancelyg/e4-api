@@ -18,6 +18,8 @@
 - 日记创建、编辑、删除、详情查看
 - 日记分页、关键词搜索、按月份筛选
 - 日记统计：总篇数、最长连续记录、时间跨度、记录频率
+- 匿名 JSON 临时存取接口，支持按 key 的 GET/POST/PUT/DELETE
+- 登录后台可分页查看 JSON 元信息，支持复制内容与删除
 - 单二进制部署：前端资源嵌入 Go 可执行文件
 
 ## 技术栈
@@ -209,6 +211,18 @@ auth:
 
 site:
   title: E4 Diary
+
+json_store:
+  max_size_bytes: 524288
+  default_ttl_days: 30
+  max_ttl_days: 90
+  min_key_length: 6
+  max_key_length: 64
+  max_items: 1000
+  max_total_bytes: 134217728
+  read_rate_limit: 120
+  write_rate_limit: 30
+  rate_limit_window_seconds: 60
 ```
 
 ### 配置来源矩阵
@@ -226,6 +240,16 @@ site:
 | `auth.rate_limit` | `E4_AUTH_RATE_LIMIT` | 不支持 | `auth.rate_limit` | `5` |
 | `auth.lockout_minutes` | `E4_AUTH_LOCKOUT_MINUTES` | 不支持 | `auth.lockout_minutes` | `15` |
 | `site.title` | `E4_SITE_TITLE` | 不支持 | `site.title` | `E4 Diary` |
+| `json_store.max_size_bytes` | `E4_JSON_STORE_MAX_SIZE_BYTES` | 不支持 | `json_store.max_size_bytes` | `524288` |
+| `json_store.default_ttl_days` | `E4_JSON_STORE_DEFAULT_TTL_DAYS` | 不支持 | `json_store.default_ttl_days` | `30` |
+| `json_store.max_ttl_days` | `E4_JSON_STORE_MAX_TTL_DAYS` | 不支持 | `json_store.max_ttl_days` | `90` |
+| `json_store.min_key_length` | `E4_JSON_STORE_MIN_KEY_LENGTH` | 不支持 | `json_store.min_key_length` | `6` |
+| `json_store.max_key_length` | `E4_JSON_STORE_MAX_KEY_LENGTH` | 不支持 | `json_store.max_key_length` | `64` |
+| `json_store.max_items` | `E4_JSON_STORE_MAX_ITEMS` | 不支持 | `json_store.max_items` | `1000` |
+| `json_store.max_total_bytes` | `E4_JSON_STORE_MAX_TOTAL_BYTES` | 不支持 | `json_store.max_total_bytes` | `134217728` |
+| `json_store.read_rate_limit` | `E4_JSON_STORE_READ_RATE_LIMIT` | 不支持 | `json_store.read_rate_limit` | `120` |
+| `json_store.write_rate_limit` | `E4_JSON_STORE_WRITE_RATE_LIMIT` | 不支持 | `json_store.write_rate_limit` | `30` |
+| `json_store.rate_limit_window_seconds` | `E4_JSON_STORE_RATE_LIMIT_WINDOW_SECONDS` | 不支持 | `json_store.rate_limit_window_seconds` | `60` |
 
 说明：
 
@@ -326,6 +350,41 @@ E4_TOTP_ISSUER="E4 Diary" E4_TOTP_ACCOUNT="admin" ./scripts/generate-totp.sh
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/api/ip` | 返回客户端 IP 与 User-Agent |
+
+### 匿名 JSON 接口
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/json/:key` | 创建 JSON，已存在则返回冲突 |
+| GET | `/api/json/:key` | 读取原始 JSON |
+| PUT | `/api/json/:key` | 创建或覆盖 JSON，并刷新过期时间 |
+| DELETE | `/api/json/:key` | 删除 JSON |
+
+规则：
+
+- `key` 仅允许字母和数字，长度默认 `6-64`
+- 请求体直接提交原始 JSON，不包额外字段
+- 单条 JSON 默认最大 `512 KiB`
+- `ttl_days` 可选，不传默认 `30`，最大默认 `90`
+- 公开接口不提供列表能力
+
+示例：
+
+```bash
+curl -X POST \
+  -H 'Content-Type: application/json' \
+  --data-binary '{"hello":"world"}' \
+  'http://localhost:8080/api/json/Abc123'
+
+curl 'http://localhost:8080/api/json/Abc123'
+
+curl -X PUT \
+  -H 'Content-Type: application/json' \
+  --data-binary @data.json \
+  'http://localhost:8080/api/json/Abc123?ttl_days=45'
+
+curl -X DELETE 'http://localhost:8080/api/json/Abc123'
+```
 
 ## 测试与检查
 

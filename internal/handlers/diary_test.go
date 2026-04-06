@@ -202,9 +202,60 @@ func TestDiaryListSupportsFuzzySearch(t *testing.T) {
 	assert.Contains(t, response.Diaries[0].Content, "登录刷新")
 }
 
+func TestDiaryGetReturnsDiaryByID(t *testing.T) {
+	handler, e := setupTestDiaryHandler(t)
+	seedDiaries(t, []models.Diary{{Content: "查看详情", CreateDate: "2024-03-10"}})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/diary/1", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/api/diary/:id")
+	c.SetParamNames("id")
+	c.SetParamValues("1")
+
+	err := handler.Get(c)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var response models.Diary
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response))
+	assert.Equal(t, "查看详情", response.Content)
+	assert.Equal(t, "2024-03-10", response.CreateDate)
+}
+
+func TestDiaryGetRejectsInvalidID(t *testing.T) {
+	handler, e := setupTestDiaryHandler(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/diary/abc", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/api/diary/:id")
+	c.SetParamNames("id")
+	c.SetParamValues("abc")
+
+	err := handler.Get(c)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.JSONEq(t, `{"error":"无效的日记 ID"}`, rec.Body.String())
+}
+
+func TestDiaryGetReturnsNotFound(t *testing.T) {
+	handler, e := setupTestDiaryHandler(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/diary/42", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/api/diary/:id")
+	c.SetParamNames("id")
+	c.SetParamValues("42")
+
+	err := handler.Get(c)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusNotFound, rec.Code)
+	assert.JSONEq(t, `{"error":"日记不存在"}`, rec.Body.String())
+}
+
 func TestDiaryCreateRejectsBlankContent(t *testing.T) {
 	handler, e := setupTestDiaryHandler(t)
-	body := bytes.NewBufferString(`{"content":"   ","create_date":"2024-01-10"}`)
+	body := bytes.NewBufferString(`{"content":"   "}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/diary", body)
 	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	rec := httptest.NewRecorder()
@@ -216,34 +267,48 @@ func TestDiaryCreateRejectsBlankContent(t *testing.T) {
 	assert.JSONEq(t, `{"error":"日记内容不能为空"}`, rec.Body.String())
 }
 
-func TestDiaryUpdateRejectsBlankContent(t *testing.T) {
+func TestDiaryCreateUsesTodayWhenNoExistingEntry(t *testing.T) {
 	handler, e := setupTestDiaryHandler(t)
-	seedDiaries(t, []models.Diary{{Content: "原始内容", CreateDate: "2024-01-10"}})
-
-	body := bytes.NewBufferString(`{"content":"   "}`)
-	req := httptest.NewRequest(http.MethodPut, "/api/diary/1", body)
+	body := bytes.NewBufferString(`{"content":"第一篇日记"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/diary", body)
 	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
-	c.SetParamNames("id")
-	c.SetParamValues("1")
 
-	err := handler.Update(c)
+	err := handler.Create(c)
 	require.NoError(t, err)
-	require.Equal(t, http.StatusBadRequest, rec.Code)
-	assert.JSONEq(t, `{"error":"日记内容不能为空"}`, rec.Body.String())
+	require.Equal(t, http.StatusCreated, rec.Code)
+
+	var response models.Diary
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response))
+	assert.Equal(t, "第一篇日记", response.Content)
+	assert.Equal(t, time.Now().Format("2006-01-02"), response.CreateDate)
 }
 
-func TestDiaryDeleteReturnsNotFoundForMissingEntry(t *testing.T) {
+func TestDiaryCreateUsesNextDateFromLatestEntry(t *testing.T) {
 	handler, e := setupTestDiaryHandler(t)
-	req := httptest.NewRequest(http.MethodDelete, "/api/diary/999", nil)
+	seedDiaries(t, []models.Diary{
+		{Content: "更早的记录", CreateDate: "2024-01-03"},
+		{Content: "最新的记录", CreateDate: "2024-01-10"},
+	})
+
+	body := bytes.NewBufferString(`{"content":"自动续写"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/diary", body)
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
-	c.SetParamNames("id")
-	c.SetParamValues("999")
 
-	err := handler.Delete(c)
+	err := handler.Create(c)
 	require.NoError(t, err)
-	require.Equal(t, http.StatusNotFound, rec.Code)
-	assert.JSONEq(t, `{"error":"日记不存在"}`, rec.Body.String())
+	require.Equal(t, http.StatusCreated, rec.Code)
+
+	var response models.Diary
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response))
+	assert.Equal(t, "2024-01-11", response.CreateDate)
+
+	var diaries []models.Diary
+	require.NoError(t, db.DB.Order("create_date ASC").Find(&diaries).Error)
+	require.Len(t, diaries, 3)
+	assert.Equal(t, "2024-01-11", diaries[2].CreateDate)
+	assert.Equal(t, "自动续写", diaries[2].Content)
 }

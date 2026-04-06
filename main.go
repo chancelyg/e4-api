@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"e4-api/internal/config"
@@ -100,13 +101,17 @@ func main() {
 		LogContentLength: true,
 		LogResponseSize:  true,
 		LogValuesFunc: func(c echo.Context, v echoMiddleware.RequestLoggerValues) error {
+			uri := v.URI
+			if shouldRedactRequestURI(c.Path()) {
+				uri = redactPath(c.Path())
+			}
 			log.Printf(
 				"http request request_id=%s ip=%s host=%s method=%s uri=%s route=%s status=%d latency=%s request_bytes=%s response_bytes=%d protocol=%s user_agent=%q error=%v",
 				v.RequestID,
 				v.RemoteIP,
 				v.Host,
 				v.Method,
-				v.URI,
+				uri,
 				v.RoutePath,
 				v.Status,
 				v.Latency.Round(time.Microsecond),
@@ -143,6 +148,7 @@ func main() {
 	diaryHandler := handlers.NewDiaryHandler()
 	goalHandler := handlers.NewGoalHandler()
 	commonHandler := handlers.NewCommonHandler()
+	jsonStoreHandler := handlers.NewJSONStoreHandler()
 
 	// Static files - use embedded filesystem (no auth required)
 	// Strip the "dist" prefix from embedded paths
@@ -169,6 +175,10 @@ func main() {
 		api.POST("/auth/login-step2", authHandler.LoginStep2)
 		api.POST("/auth/logout", authHandler.Logout)
 		api.GET("/auth/status", authHandler.Status)
+		api.POST("/json/:key", jsonStoreHandler.Create)
+		api.GET("/json/:key", jsonStoreHandler.Get)
+		api.PUT("/json/:key", jsonStoreHandler.Upsert)
+		api.DELETE("/json/:key", jsonStoreHandler.Delete)
 
 		// Protected routes
 		protected := api.Group("", authMiddleware.ValidateSession)
@@ -176,8 +186,6 @@ func main() {
 		protected.POST("/diary", diaryHandler.Create)
 		protected.GET("/diary/stats", diaryHandler.Stats)
 		protected.GET("/diary/:id", diaryHandler.Get)
-		protected.PUT("/diary/:id", diaryHandler.Update)
-		protected.DELETE("/diary/:id", diaryHandler.Delete)
 		protected.GET("/goals", goalHandler.List)
 		protected.POST("/goals", goalHandler.Create)
 		protected.GET("/goals/dashboard", goalHandler.Dashboard)
@@ -187,6 +195,9 @@ func main() {
 		protected.PUT("/goals/:id/records/:date", goalHandler.UpsertRecord)
 		protected.DELETE("/goals/:id/records/:date", goalHandler.DeleteRecord)
 		protected.GET("/ip", commonHandler.GetIP)
+		protected.GET("/admin/json", jsonStoreHandler.AdminList)
+		protected.GET("/admin/json/:key/content", jsonStoreHandler.AdminGetContent)
+		protected.DELETE("/admin/json/:key", jsonStoreHandler.AdminDelete)
 	}
 
 	// Serve index.html for all other routes (SPA fallback)
@@ -213,6 +224,17 @@ func main() {
 	address := host + ":" + strconv.Itoa(port)
 	log.Printf("server starting address=%s mode=%s version=%s commit=%s built=%s", address, config.Cfg.Server.Mode, version, commit, buildDate)
 	log.Fatal(e.Start(address))
+}
+
+func shouldRedactRequestURI(routePath string) bool {
+	return strings.HasPrefix(routePath, "/api/json/") || strings.HasPrefix(routePath, "/api/admin/json/")
+}
+
+func redactPath(routePath string) string {
+	if routePath == "" {
+		return ""
+	}
+	return routePath
 }
 
 func logConfigSummary() {

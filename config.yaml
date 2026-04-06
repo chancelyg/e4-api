@@ -16,3 +16,15 @@ auth:
 
 site:
   title: E4 Diary
+
+json_store:
+  max_size_bytes: 524288
+  default_ttl_days: 30
+  max_ttl_days: 90
+  min_key_length: 6
+  max_key_length: 64
+  max_items: 1000
+  max_total_bytes: 134217728
+  read_rate_limit: 120
+  write_rate_limit: 30
+  rate_limit_window_seconds: 60
